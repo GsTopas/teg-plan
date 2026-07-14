@@ -1,0 +1,882 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TEG Digitalisering – 18 måneders plan</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --s-blue: #2a78d6;    /* Nezasa / Samlet booking GL */
+    --s-aqua: #1baf7a;    /* ERP */
+    --s-yellow: #eda100;  /* Topas.dk */
+    --s-green: #008300;   /* Diskoline */
+    --s-violet: #4a3aa7;  /* Spectra */
+    --s-red: #e34948;     /* Greenland Hotels */
+    --s-magenta: #e87ba4; /* LS Hotels */
+    --s-orange: #eb6834;  /* Lønsystem */
+    --s-gray: #898781;    /* Drift (baseline) */
+    --status-good: #0ca30c;
+    --status-warning: #fab219;
+    --status-critical: #d03b3b;
+    --good-text: #006300;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255,255,255,0.10);
+    --s-blue: #3987e5;
+    --s-aqua: #199e70;
+    --s-yellow: #c98500;
+    --s-green: #008300;
+    --s-violet: #9085e9;
+    --s-red: #e66767;
+    --s-magenta: #d55181;
+    --s-orange: #d95926;
+    --s-gray: #898781;
+    --good-text: #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --border: rgba(255,255,255,0.10);
+      --s-blue: #3987e5;
+      --s-aqua: #199e70;
+      --s-yellow: #c98500;
+      --s-green: #008300;
+      --s-violet: #9085e9;
+      --s-red: #e66767;
+      --s-magenta: #d55181;
+      --s-orange: #d95926;
+      --s-gray: #898781;
+      --good-text: #0ca30c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 24px 20px 60px; }
+  header.top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+  h1 { font-size: 21px; margin: 0 0 4px; font-weight: 650; }
+  .subtitle { color: var(--text-secondary); font-size: 13px; max-width: 640px; }
+  .top-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  button, select, input { font: inherit; color: var(--text-primary); }
+  .btn {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 12px; cursor: pointer; font-size: 13px; color: var(--text-secondary);
+  }
+  .btn:hover { border-color: var(--axis); color: var(--text-primary); }
+  /* KPI tiles */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .tile .label { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+  .tile .value { font-size: 26px; font-weight: 650; }
+  .tile .sub { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+  .tile .value.crit { color: var(--status-critical); }
+  .tile .value.ok { color: var(--good-text); }
+  /* Filter row */
+  .filters { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 4px 0 14px; padding: 10px 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; }
+  .filters label { font-size: 12.5px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+  .filters select { background: var(--surface-1); border: 1px solid var(--border); border-radius: 7px; padding: 4px 8px; font-size: 13px; }
+  .filters .chk { accent-color: var(--s-blue); }
+  /* Cards */
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 18px 18px 14px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin: 0 0 2px; font-weight: 650; }
+  .card .desc { font-size: 12.5px; color: var(--text-secondary); margin: 0 0 12px; }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  /* Gantt */
+  #gantt-outer { overflow-x: auto; }
+  #gantt { position: relative; min-width: 980px; }
+  .g-svg { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+  .g-row-label { font-size: 12.5px; }
+  .g-owner { font-size: 11px; color: var(--text-muted); }
+  .warn-chip { display: inline-block; font-size: 10.5px; color: var(--status-critical); border: 1px solid var(--status-critical); border-radius: 6px; padding: 0 5px; margin-left: 6px; vertical-align: 1px; }
+  /* Heatmap */
+  #heat-outer { overflow-x: auto; }
+  table.heat { border-collapse: separate; border-spacing: 2px; min-width: 980px; width: 100%; }
+  table.heat th { font-size: 11px; color: var(--text-muted); font-weight: 500; padding: 3px 2px; text-align: center; }
+  table.heat th.person { text-align: left; font-size: 12.5px; color: var(--text-primary); font-weight: 550; padding-right: 10px; white-space: nowrap; }
+  table.heat th.person .role { display: block; font-size: 10.5px; color: var(--text-muted); font-weight: 400; }
+  table.heat td { text-align: center; font-size: 11px; border-radius: 4px; padding: 6px 2px; min-width: 42px; cursor: default; position: relative; font-variant-numeric: tabular-nums; }
+  table.heat td:focus { outline: 2px solid var(--s-blue); outline-offset: 1px; }
+  .scale-legend { display: flex; align-items: center; gap: 10px; font-size: 11.5px; color: var(--text-secondary); margin-top: 10px; flex-wrap: wrap; }
+  .scale-legend .sw { display: inline-block; width: 22px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 3px; }
+  /* Tooltip */
+  #tooltip {
+    position: fixed; z-index: 50; display: none; max-width: 280px;
+    background: var(--surface-1); border: 1px solid var(--axis); border-radius: 9px;
+    padding: 9px 11px; font-size: 12px; box-shadow: 0 4px 18px rgba(0,0,0,0.18); pointer-events: none;
+  }
+  #tooltip .tt-title { font-weight: 600; margin-bottom: 4px; }
+  #tooltip .tt-row { display: flex; justify-content: space-between; gap: 14px; color: var(--text-secondary); }
+  #tooltip .tt-row b { color: var(--text-primary); font-weight: 550; }
+  #tooltip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  /* Warnings */
+  ul.warnlist { margin: 6px 0 4px; padding-left: 0; list-style: none; }
+  ul.warnlist li { padding: 7px 10px; border-radius: 8px; margin-bottom: 6px; font-size: 13px; display: flex; gap: 8px; align-items: baseline; }
+  ul.warnlist li.crit { background: color-mix(in srgb, var(--status-critical) 9%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--status-critical) 35%, var(--surface-1)); }
+  ul.warnlist li.warn { background: color-mix(in srgb, var(--status-warning) 11%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--status-warning) 40%, var(--surface-1)); }
+  ul.warnlist li .ic { font-weight: 700; }
+  ul.warnlist li.crit .ic { color: var(--status-critical); }
+  ul.warnlist li.warn .ic { color: color-mix(in srgb, var(--status-warning) 70%, var(--text-primary)); }
+  .allok { color: var(--good-text); font-size: 13px; padding: 6px 2px; }
+  /* Editors */
+  details.editor { margin-top: 4px; }
+  details.editor summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); padding: 4px 0; }
+  details.editor summary:hover { color: var(--text-primary); }
+  table.edit { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  table.edit th { text-align: left; font-size: 11px; color: var(--text-muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--grid); }
+  table.edit td { padding: 4px 6px; border-bottom: 1px solid var(--grid); }
+  table.edit select, table.edit input { background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font-size: 12.5px; max-width: 100%; }
+  table.edit input[type=number] { width: 62px; }
+  .mini-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 5px; }
+  .mini-btn:hover { color: var(--status-critical); background: color-mix(in srgb, var(--status-critical) 10%, transparent); }
+  .add-btn { background: none; border: 1px dashed var(--axis); border-radius: 7px; color: var(--text-secondary); padding: 5px 12px; cursor: pointer; font-size: 12.5px; margin-top: 2px; }
+  .add-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
+  /* Table views */
+  details.tblview { margin-top: 10px; }
+  details.tblview summary { cursor: pointer; font-size: 12.5px; color: var(--text-muted); }
+  details.tblview table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 12.5px; }
+  details.tblview th, details.tblview td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--grid); }
+  details.tblview th { color: var(--text-muted); font-weight: 500; font-size: 11.5px; }
+  details.tblview td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .note { font-size: 12px; color: var(--text-muted); margin-top: 14px; border-top: 1px solid var(--grid); padding-top: 10px; }
+  footer { font-size: 11.5px; color: var(--text-muted); margin-top: 8px; }
+</style>
+</head>
+<body class="viz-root">
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>TEG Digitalisering – 18 måneders leveranceplan</h1>
+      <div class="subtitle">Juli 2026 – december 2027 · månedlig granularitet · ressourcer &amp; afhængigheder. Alle ændringer under “Redigér data” <b>gemmes automatisk</b> og deles med alle, der har planen åben.</div>
+    </div>
+    <div class="top-actions">
+      <button class="btn" id="themeBtn" title="Skift mellem lys og mørk">Lys/mørk</button>
+      <button class="btn" id="exportBtn" title="Kopiér alle data (spor, allokeringer, afhængigheder) som JSON">Kopiér data (JSON)</button>
+      <button class="btn" id="logoutBtn" style="display:none" title="Log ud af planen">Log ud</button>
+    </div>
+  </header>
+
+  <div id="demoBanner" style="display:none;margin:0 0 12px;padding:8px 14px;border:1px solid var(--status-warning);border-radius:10px;font-size:12.5px;color:var(--text-secondary);">Demo-tilstand: SUPABASE_URL / SUPABASE_ANON_KEY er ikke udfyldt øverst i filens script – data vises lokalt og gemmes <b>ikke</b>.</div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="filters">
+    <label>Person
+      <select id="personFilter"><option value="">Alle</option></select>
+    </label>
+    <label>Spor
+      <select id="trackFilter"><option value="">Alle</option></select>
+    </label>
+    <label><input type="checkbox" class="chk" id="depToggle" checked> Vis afhængigheder</label>
+  </div>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Tidslinje &amp; milepæle</h2>
+        <p class="desc">Fuldt farvede bjælker = aktiv leverancefase · nedtonede/tynde = løbende drift &amp; videreudvikling · ◆ = milepæl · pile = afhængigheder (rød = konflikt) · lodret linje = i dag.</p>
+      </div>
+    </div>
+    <div id="gantt-outer"><div id="gantt"></div></div>
+    <details class="tblview"><summary>Vis som tabel</summary><div id="ganttTable"></div></details>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Ressourcebelastning pr. måned</h2>
+        <p class="desc">Samlet allokering pr. person (% af fuld tid, sum på tværs af spor). Hold musen over en celle for fordeling pr. spor.</p>
+      </div>
+    </div>
+    <div id="heat-outer"></div>
+    <div class="scale-legend" id="heatLegend"></div>
+    <details class="tblview"><summary>Vis som tabel</summary><div id="heatTable"></div></details>
+  </section>
+
+  <section class="card">
+    <h2>Advarsler</h2>
+    <p class="desc">Automatisk beregnet: overbookede personer (&gt;100 %) og afhængigheder hvor forudsætningen ligger efter – eller klods op ad – det afhængige projekts start.</p>
+    <div id="warnings"></div>
+  </section>
+
+  <section class="card">
+    <h2>Redigér data</h2>
+    <p class="desc">Ændringer slår igennem med det samme i tidslinje, heatmap og advarsler – og gemmes automatisk i databasen, så alle ser det samme.</p>
+    <details class="editor" open>
+      <summary><b>Punkter på tidslinjen</b> (milepæle: navn, måned, ejer)</summary>
+      <div id="msEditor"></div>
+    </details>
+    <details class="editor">
+      <summary><b>Allokeringer</b> (person → spor, periode, %)</summary>
+      <div id="allocEditor"></div>
+    </details>
+    <details class="editor" open>
+      <summary><b>Afhængigheder</b> (milepæl → projekt/milepæl)</summary>
+      <div id="depEditor"></div>
+    </details>
+    <div class="note">Alle procenter er foreløbige skøn indsat som udgangspunkt (baseret på 3-års planen) – tilpas dem til virkeligheden. “Frontend dev (ny)” er en endnu ikke besat rolle.</div>
+  </section>
+
+  <footer>TEG 18-måneders digitaliseringsplan · genereret 14. juli 2026 · baseret på “TEG 3 Års Digitaliserings plan”.</footer>
+</div>
+<div id="tooltip" role="tooltip"></div>
+
+<div id="authOverlay" style="display:none;position:fixed;inset:0;background:var(--page);z-index:100;align-items:center;justify-content:center;">
+  <div class="card" style="max-width:380px;width:92%;">
+    <h2>TEG Leveranceplan – log ind</h2>
+    <p class="desc">Skriv din arbejds-e-mail, så sender vi dig et login-link.</p>
+    <input type="email" id="authEmail" placeholder="navn@topas.dk" autocomplete="email"
+           style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-1);margin-bottom:8px;font-size:14px;">
+    <button class="btn" id="authSend" style="width:100%;padding:9px;">Send login-link</button>
+    <div id="authMsg" style="font-size:12.5px;color:var(--text-secondary);margin-top:10px;"></div>
+  </div>
+</div>
+<div id="toast" style="display:none;position:fixed;bottom:18px;right:18px;z-index:120;background:var(--surface-1);border:1px solid var(--axis);border-radius:9px;padding:9px 13px;font-size:13px;box-shadow:0 4px 18px rgba(0,0,0,.2);max-width:320px;"></div>
+
+<script>
+/* ================== KONFIG – udfyld disse to ================== */
+const SUPABASE_URL = 'https://bymurhqfcyxdhrayddoz.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_uLSR_3rHlFtrRYNt5jbj6A_3kiZAqDY';
+
+/* ================== TIDSAKSE ================== */
+const MONTHS = [];
+(function(){
+  const names = ['Jan','Feb','Mar','Apr','Maj','Jun','Jul','Aug','Sep','Okt','Nov','Dec'];
+  let y = 2026, m = 6; // Jul 2026
+  for (let i = 0; i < 18; i++) {
+    MONTHS.push({ label: names[m], year: y, full: names[m] + ' ' + y, q: 'Q' + (Math.floor(m/3)+1) + ' ' + y });
+    m++; if (m > 11) { m = 0; y++; }
+  }
+})();
+const QUARTERS = [];
+MONTHS.forEach((mo, i) => {
+  const last = QUARTERS[QUARTERS.length-1];
+  if (!last || last.q !== mo.q) QUARTERS.push({ q: mo.q, start: i, len: 1 });
+  else last.len++;
+});
+const TODAY_X = 0 + 13/31;
+
+/* ================== DATA (fyldes fra Supabase eller demo-seed) ================== */
+let PEOPLE = [], TRACKS = [], ALLOC = [], DEPS = [];
+let sb = null, localSeq = 0, booted = false;
+const locId = () => 'loc-' + (++localSeq);
+
+function seedDemo() {
+  /* Demo-seed er fjernet i den hostede udgave — data hentes fra Supabase efter login. */
+  PEOPLE = []; TRACKS = []; ALLOC = []; DEPS = [];
+}
+
+/* ================== SUPABASE: LOAD & GEM ================== */
+function toast(msg) {
+  const el = $('#toast');
+  el.textContent = msg; el.style.display = 'block';
+  clearTimeout(toast._t); toast._t = setTimeout(() => el.style.display = 'none', 3500);
+}
+async function dbTry(q) {
+  const { data, error } = await q;
+  if (error) { console.error(error); toast('Kunne ikke gemme: ' + error.message); return null; }
+  return data;
+}
+async function loadAll() {
+  const [pe, tr, ms, al, de] = await Promise.all([
+    sb.from('plan_people').select('*').order('sort'),
+    sb.from('plan_tracks').select('*').order('id'),
+    sb.from('plan_milestones').select('*').order('m'),
+    sb.from('plan_allocations').select('*').order('from_m'),
+    sb.from('plan_dependencies').select('*'),
+  ]);
+  for (const r of [pe, tr, ms, al, de]) if (r.error) { toast('Kunne ikke hente data: ' + r.error.message); return; }
+  PEOPLE = pe.data.map(r => ({ id:r.id, name:r.name, role:r.role }));
+  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:r.color, from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, milestones:[] }));
+  ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, label:r.label, owner:r.owner }); });
+  ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct }));
+  DEPS = de.data.map(r => ({ id:r.id, fromMs:r.from_ms, toT:r.to_track, toMs:r.to_ms }));
+}
+const DB = {
+  async addMilestone(tid, ms) {
+    if (!sb) { ms.id = locId(); return; }
+    const d = await dbTry(sb.from('plan_milestones').insert({ track_id:tid, m:ms.m, label:ms.label, owner:ms.owner }).select().single());
+    ms.id = d ? d.id : locId();
+  },
+  updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, label:ms.label, owner:ms.owner }).eq('id', ms.id)); },
+  delMilestone(id) { if (sb) dbTry(sb.from('plan_milestones').delete().eq('id', id)); },
+  async addAlloc(a) {
+    if (!sb) { a.id = locId(); return; }
+    const d = await dbTry(sb.from('plan_allocations').insert({ person_id:a.p, track_id:a.t, from_m:a.from, to_m:a.to, pct:a.pct }).select().single());
+    a.id = d ? d.id : locId();
+  },
+  updAlloc(a) { if (sb) dbTry(sb.from('plan_allocations').update({ person_id:a.p, track_id:a.t, from_m:a.from, to_m:a.to, pct:a.pct }).eq('id', a.id)); },
+  delAlloc(id) { if (sb) dbTry(sb.from('plan_allocations').delete().eq('id', id)); },
+  async addDep(d0) {
+    if (!sb) { d0.id = locId(); return; }
+    const d = await dbTry(sb.from('plan_dependencies').insert({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs }).select().single());
+    d0.id = d ? d.id : locId();
+  },
+  updDep(d0) { if (sb) dbTry(sb.from('plan_dependencies').update({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs }).eq('id', d0.id)); },
+  delDep(id) { if (sb) dbTry(sb.from('plan_dependencies').delete().eq('id', id)); },
+};
+function subscribeRealtime() {
+  if (!sb) return;
+  let t;
+  const reload = () => { clearTimeout(t); t = setTimeout(async () => { await loadAll(); refresh(true); }, 350); };
+  const ch = sb.channel('plan-sync');
+  ['plan_people','plan_tracks','plan_milestones','plan_allocations','plan_dependencies']
+    .forEach(tb => ch.on('postgres_changes', { event:'*', schema:'public', table:tb }, reload));
+  ch.subscribe();
+}
+
+/* ================== HJÆLPERE ================== */
+const $ = s => document.querySelector(s);
+const state = { person:'', track:'', showDeps:true };
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const trackById = id => TRACKS.find(t => t.id === id);
+const personById = id => PEOPLE.find(p => p.id === id);
+const personDisp = p => p.name + (p.role.startsWith('Løn') || p.role.startsWith('ERP') ? ' (' + p.role + ')' : '');
+const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+const isDark = () => {
+  const t = document.documentElement.getAttribute('data-theme');
+  if (t) return t === 'dark';
+  return matchMedia('(prefers-color-scheme: dark)').matches;
+};
+function findMs(id) {
+  for (const t of TRACKS) { const ms = t.milestones.find(m => m.id === id); if (ms) return { t, ms }; }
+  return null;
+}
+const depFrom = d => findMs(d.fromMs);
+function depTo(d) {
+  if (d.toMs) return findMs(d.toMs);
+  const t = trackById(d.toT); return t ? { t, ms: null } : null;
+}
+function depStatus(d) {
+  const F = depFrom(d), T = depTo(d);
+  if (!F || !T) return 'ok';
+  const a = F.ms.m, b = T.ms ? T.ms.m : T.t.from;
+  if (a > b) return 'conflict';
+  if (b - a <= 1) return 'tight';
+  return 'ok';
+}
+function loadFor(personId, monthIdx, trackId) {
+  let sum = 0;
+  for (const a of ALLOC) {
+    if (a.p !== personId) continue;
+    if (trackId && a.t !== trackId) continue;
+    if (monthIdx >= a.from && monthIdx <= a.to) sum += Number(a.pct) || 0;
+  }
+  return sum;
+}
+function breakdown(personId, monthIdx) {
+  const map = {};
+  for (const a of ALLOC) {
+    if (a.p !== personId) continue;
+    if (monthIdx >= a.from && monthIdx <= a.to) map[a.t] = (map[a.t]||0) + (Number(a.pct)||0);
+  }
+  return Object.entries(map).filter(([,v]) => v > 0);
+}
+function heatColor(v) {
+  if (v > 100) return { bg: cssVar('--status-critical'), fg: '#ffffff' };
+  const dark = isDark();
+  const light = ['#cde2fb','#9ec5f4','#5598e7','#2a78d6','#1c5cab'];
+  const darkR = ['#0d366b','#184f95','#256abf','#5598e7','#86b6ef'];
+  const ramp = dark ? darkR : light;
+  let idx;
+  if (v <= 25) idx = 0; else if (v <= 50) idx = 1; else if (v <= 75) idx = 2; else if (v <= 90) idx = 3; else idx = 4;
+  const bg = ramp[idx];
+  const fg = dark ? (idx >= 3 ? '#0b0b0b' : '#ffffff') : (idx >= 2 ? '#ffffff' : '#0b0b0b');
+  return { bg, fg };
+}
+
+/* ================== TOOLTIP ================== */
+const tt = document.getElementById('tooltip');
+function showTT(html, x, y) {
+  tt.innerHTML = html; tt.style.display = 'block';
+  const r = tt.getBoundingClientRect();
+  let left = x + 14, top = y + 14;
+  if (left + r.width > innerWidth - 10) left = x - r.width - 12;
+  if (top + r.height > innerHeight - 10) top = y - r.height - 12;
+  tt.style.left = left + 'px'; tt.style.top = top + 'px';
+}
+function hideTT(){ tt.style.display = 'none'; }
+
+/* ================== KPI-FLISER ================== */
+function renderTiles() {
+  const milestoneCount = TRACKS.reduce((s,t) => s + t.milestones.length, 0);
+  let over = 0;
+  PEOPLE.forEach(p => { for (let i=0;i<18;i++) if (loadFor(p.id,i) > 100) over++; });
+  const conflicts = DEPS.filter(d => depStatus(d) === 'conflict').length;
+  $('#tiles').innerHTML = `
+    <div class="tile"><div class="label">Spor i planen</div><div class="value">${TRACKS.length}</div><div class="sub">heraf ${TRACKS.filter(t=>t.ongoing).length} løbende</div></div>
+    <div class="tile"><div class="label">Milepæle i horisonten</div><div class="value">${milestoneCount}</div><div class="sub">jul 2026 – dec 2027</div></div>
+    <div class="tile"><div class="label">Personer / roller</div><div class="value">${PEOPLE.length}</div><div class="sub">inkl. eksterne</div></div>
+    <div class="tile"><div class="label">Overbookede person-måneder</div><div class="value ${over>0?'crit':'ok'}">${over}</div><div class="sub">${over>0?'se Advarsler':'ingen – fint!'}</div></div>
+    <div class="tile"><div class="label">Afhængigheder</div><div class="value ${conflicts>0?'crit':''}">${DEPS.length}</div><div class="sub">${conflicts>0? conflicts + ' konflikt(er)' : 'ingen konflikter'}</div></div>`;
+}
+
+/* ================== GANTT ================== */
+const G = { labelW: 250, rowH: 64, headH: 44 };
+function visibleTracks() {
+  const key = t => {
+    if (t.baseline) return [1, 99, 99];
+    const lastMs = t.milestones.length ? Math.max(...t.milestones.map(m => m.m)) : t.solidTo;
+    return [0, t.solidTo + (t.ongoing ? 0.5 : 0), lastMs];
+  };
+  return TRACKS.slice().sort((a, b) => {
+    const ka = key(a), kb = key(b);
+    for (let i = 0; i < 3; i++) if (ka[i] !== kb[i]) return ka[i] - kb[i];
+    return 0;
+  });
+}
+function trackDimmed(t) {
+  if (state.track && t.id !== state.track) return true;
+  if (state.person) {
+    const onTrack = ALLOC.some(a => a.p === state.person && a.t === t.id && a.pct > 0);
+    if (!onTrack) return true;
+  }
+  return false;
+}
+function renderGantt() {
+  const cont = $('#gantt');
+  const tracks = visibleTracks();
+  const outerW = $('#gantt-outer').clientWidth;
+  const W = Math.max(outerW, 980);
+  const plotW = W - G.labelW;
+  const colW = plotW / 18;
+  const H = G.headH + tracks.length * G.rowH + 16;
+  cont.style.width = W + 'px';
+  cont.style.height = H + 'px';
+
+  let html = '';
+  QUARTERS.forEach(q => {
+    html += `<div style="position:absolute;left:${G.labelW + q.start*colW}px;top:0;width:${q.len*colW}px;height:16px;font-size:11px;color:var(--text-muted);text-align:center;">${q.q}</div>`;
+  });
+  MONTHS.forEach((mo,i) => {
+    html += `<div style="position:absolute;left:${G.labelW + i*colW}px;top:18px;width:${colW}px;font-size:10.5px;color:var(--text-muted);text-align:center;">${mo.label}</div>`;
+  });
+  for (let i = 0; i <= 18; i++) {
+    const isQ = i % 3 === 0;
+    html += `<div style="position:absolute;left:${G.labelW + i*colW}px;top:${G.headH-8}px;bottom:0;width:1px;background:${isQ?'var(--axis)':'var(--grid)'};"></div>`;
+  }
+  const tx = G.labelW + TODAY_X * colW;
+  html += `<div style="position:absolute;left:${tx}px;top:${G.headH-8}px;height:${H - (G.headH-8) - 15}px;width:2px;background:var(--text-muted);opacity:.6;"></div>
+           <div style="position:absolute;left:${tx-13}px;top:${H-13}px;font-size:10px;color:var(--text-muted);">i dag</div>`;
+
+  tracks.forEach((t, r) => {
+    const y = G.headH + r * G.rowH;
+    const dim = trackDimmed(t) ? 'opacity:.28;' : '';
+    const col = `var(${t.color})`;
+    html += `<div style="position:absolute;left:0;top:${y}px;width:${W}px;height:${G.rowH}px;border-bottom:1px solid var(--grid);${dim}" data-trackrow="${t.id}">`;
+    html += `<div class="g-row-label" style="position:absolute;left:0;top:9px;width:${G.labelW-16}px;">
+               <span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${t.name}
+               <span class="g-owner" style="display:block;margin-left:15px;">${t.owner}</span></div>`;
+    const barY = 16;
+    const x1 = G.labelW + t.from * colW + 2;
+    const x2solid = G.labelW + (t.solidTo + 1) * colW - 2;
+    const x2 = G.labelW + (t.to + 1) * colW - 2;
+    if (t.baseline) {
+      html += `<div style="position:absolute;left:${x1}px;top:${barY+2}px;width:${x2solid-x1}px;height:6px;border-radius:3px;background:${col};opacity:.45;"></div>`;
+      html += `<div style="position:absolute;left:${x1+6}px;top:${barY+12}px;font-size:10px;color:var(--text-muted);">løbende basisdrift – vises for at synliggøre ressourcetrækket</div>`;
+    } else {
+      html += `<div style="position:absolute;left:${x1}px;top:${barY}px;width:${x2solid-x1}px;height:10px;border-radius:4px;background:${col};"></div>`;
+    }
+    if (t.to > t.solidTo && !t.baseline) {
+      html += `<div style="position:absolute;left:${x2solid+2}px;top:${barY+2}px;width:${x2-x2solid-2}px;height:6px;border-radius:3px;background:${col};opacity:.30;"></div>`;
+    }
+    if (t.beyond) {
+      html += `<div style="position:absolute;right:8px;top:${barY-13}px;font-size:10px;color:var(--text-muted);">${t.beyond} →</div>`;
+    }
+    const lineEnd = [-1e9, -1e9];
+    const msSorted = t.milestones.slice().sort((a,b) => a.m - b.m);
+    msSorted.forEach(ms => {
+      const mx = G.labelW + (ms.m + 0.5) * colW;
+      html += `<div data-ms="${ms.id}" tabindex="0" style="position:absolute;left:${mx-5}px;top:${barY-0.5}px;width:11px;height:11px;background:${col};transform:rotate(45deg);border:2px solid var(--surface-1);border-radius:2px;cursor:default;"></div>`;
+      const ownerSuffix = ms.owner ? ' · ' + ms.owner : '';
+      const text = ms.label + ' · ' + MONTHS[ms.m].full + ownerSuffix;
+      const estW = text.length * 5.6;
+      const rightAlign = ms.m > 14;
+      let lblStart = rightAlign ? mx + 40 - estW : Math.max(G.labelW, mx - 46);
+      let line;
+      if (lblStart >= lineEnd[0] + 8) line = 0;
+      else if (lblStart >= lineEnd[1] + 8) line = 1;
+      else { line = lineEnd[0] <= lineEnd[1] ? 0 : 1; lblStart = lineEnd[line] + 8; }
+      const yLbl = barY + 16 + line * 15;
+      const align = rightAlign ? `right:${W - mx - 40}px;text-align:right;` : `left:${lblStart}px;`;
+      html += `<div style="position:absolute;${align}top:${yLbl}px;font-size:10px;line-height:1.25;color:var(--text-secondary);white-space:nowrap;">${esc(ms.label)}<span style="color:var(--text-muted);"> · ${MONTHS[ms.m].full}${ownerSuffix}</span></div>`;
+      lineEnd[line] = lblStart + estW;
+    });
+    html += `</div>`;
+  });
+
+  if (state.showDeps) {
+    const rowIdx = {}; tracks.forEach((t,i) => rowIdx[t.id] = i);
+    let paths = '';
+    DEPS.forEach(dep => {
+      const F = depFrom(dep), T = depTo(dep);
+      if (!F || !T) return;
+      const a = F.ms.m, b = T.ms ? T.ms.m : T.t.from;
+      if (!(F.t.id in rowIdx) || !(T.t.id in rowIdx)) return;
+      const st = depStatus(dep);
+      const color = st === 'conflict' ? cssVar('--status-critical') : cssVar('--text-muted');
+      const x1 = G.labelW + (a + 0.5) * colW;
+      const y1 = G.headH + rowIdx[F.t.id] * G.rowH + 21;
+      const x2 = G.labelW + (b + (T.ms ? 0.5 : 0.08)) * colW;
+      const y2 = G.headH + rowIdx[T.t.id] * G.rowH + 21;
+      const midY = (y1 + y2) / 2;
+      paths += `<path d="M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2 + (y2>y1?-8:8)}" fill="none" stroke="${color}" stroke-width="1.6" opacity="0.85" marker-end="url(#arr${st==='conflict'?'C':'N'})"/>`;
+    });
+    html += `<svg class="g-svg" width="${W}" height="${H}">
+      <defs>
+        <marker id="arrN" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="${cssVar('--text-muted')}"/></marker>
+        <marker id="arrC" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="${cssVar('--status-critical')}"/></marker>
+      </defs>${paths}</svg>`;
+  }
+  cont.innerHTML = html;
+
+  cont.querySelectorAll('[data-ms]').forEach(el => {
+    const found = findMs(el.dataset.ms);
+    if (!found) return;
+    const { t, ms } = found;
+    const depsIn = DEPS.filter(d => d.toMs === ms.id || (!d.toMs && d.toT === t.id && ms.m === t.from));
+    const depsOut = DEPS.filter(d => d.fromMs === ms.id);
+    const html2 = `<div class="tt-title">◆ ${esc(ms.label)}</div>
+      <div class="tt-row"><span>Spor</span><b>${t.name}</b></div>
+      <div class="tt-row"><span>Måned</span><b>${MONTHS[ms.m].full}</b></div>
+      <div class="tt-row"><span>Ejer</span><b>${esc(ms.owner || t.owner)}</b></div>
+      ${depsOut.map(d => { const T = depTo(d); return T ? `<div class="tt-row"><span>Forudsætning for</span><b>${T.ms ? esc(T.ms.label) : T.t.name}</b></div>` : ''; }).join('')}
+      ${depsIn.map(d => { const F = depFrom(d); return F ? `<div class="tt-row"><span>Afhænger af</span><b>${esc(F.ms.label)}</b></div>` : ''; }).join('')}`;
+    el.addEventListener('mousemove', e => showTT(html2, e.clientX, e.clientY));
+    el.addEventListener('mouseleave', hideTT);
+    el.addEventListener('focus', () => { const r = el.getBoundingClientRect(); showTT(html2, r.left, r.bottom); });
+    el.addEventListener('blur', hideTT);
+  });
+
+  $('#ganttTable').innerHTML = `<table><thead><tr><th>Spor</th><th>Ejer</th><th>Aktiv fase</th><th>Milepæle</th></tr></thead><tbody>` +
+    tracks.map(t => `<tr><td>${t.name}</td><td>${t.owner}</td><td>${MONTHS[t.from].full} – ${MONTHS[t.solidTo].full}${t.ongoing?' (løbende herefter)':''}</td><td>${t.milestones.map(m=>`${esc(m.label)} (${MONTHS[m.m].full}${m.owner?', '+esc(m.owner):''})`).join(' · ')||'–'}</td></tr>`).join('') + `</tbody></table>`;
+}
+
+/* ================== HEATMAP ================== */
+function renderHeat() {
+  const people = PEOPLE.filter(p => !state.person || p.id === state.person);
+  let html = `<table class="heat"><thead><tr><th class="person"></th>` +
+    MONTHS.map(m => `<th>${m.label}<br><span style="font-weight:400">${String(m.year).slice(2)}</span></th>`).join('') + `</tr></thead><tbody>`;
+  people.forEach(p => {
+    html += `<tr><th class="person">${p.name}<span class="role">${p.role}</span></th>`;
+    for (let i = 0; i < 18; i++) {
+      const v = loadFor(p.id, i, state.track || null);
+      if (v === 0) { html += `<td style="background:transparent;color:var(--grid);border:1px dashed var(--grid);">·</td>`; continue; }
+      const c = heatColor(v);
+      const over = v > 100;
+      html += `<td tabindex="0" data-cell="${p.id}:${i}" style="background:${c.bg};color:${c.fg};${over?'font-weight:700;':''}">${over?'▲ ':''}${v}</td>`;
+    }
+    html += `</tr>`;
+  });
+  html += `</tbody></table>`;
+  $('#heat-outer').innerHTML = html;
+
+  $('#heat-outer').querySelectorAll('[data-cell]').forEach(el => {
+    const [pid, mi] = el.dataset.cell.split(':');
+    const p = personById(pid); const i = +mi;
+    const rows = breakdown(pid, i).map(([tid,v]) => {
+      const t = trackById(tid);
+      return `<div class="tt-row"><span><span class="dot" style="background:var(${t.color})"></span>${t.name}</span><b>${v} %</b></div>`;
+    }).join('');
+    const tot = loadFor(pid, i);
+    const html2 = `<div class="tt-title">${p.name} · ${MONTHS[i].full}</div>${rows}
+      <div class="tt-row" style="margin-top:5px;border-top:1px solid var(--grid);padding-top:4px;"><span>I alt</span><b>${tot} %${tot>100?' ▲ overbooket':''}</b></div>`;
+    el.addEventListener('mousemove', e => showTT(html2, e.clientX, e.clientY));
+    el.addEventListener('mouseleave', hideTT);
+    el.addEventListener('focus', () => { const r = el.getBoundingClientRect(); showTT(html2, r.left, r.bottom); });
+    el.addEventListener('blur', hideTT);
+  });
+
+  const steps = [[15,'1–25 %'],[40,'26–50 %'],[65,'51–75 %'],[85,'76–90 %'],[95,'91–100 %']];
+  $('#heatLegend').innerHTML = `<span>Belastning:</span>` +
+    steps.map(([v,l]) => { const c = heatColor(v); return `<span><span class="sw" style="background:${c.bg}"></span>${l}</span>`; }).join('') +
+    `<span><span class="sw" style="background:var(--status-critical)"></span>▲ &gt;100 % (overbooket)</span>`;
+
+  $('#heatTable').innerHTML = `<table><thead><tr><th>Person</th>` + MONTHS.map(m=>`<th>${m.label} ${String(m.year).slice(2)}</th>`).join('') + `</tr></thead><tbody>` +
+    PEOPLE.map(p => `<tr><td>${p.name} (${p.role})</td>` + MONTHS.map((m,i)=>`<td class="num">${loadFor(p.id,i)||''}</td>`).join('') + `</tr>`).join('') + `</tbody></table>`;
+}
+
+/* ================== ADVARSLER ================== */
+function renderWarnings() {
+  const items = [];
+  PEOPLE.forEach(p => {
+    let run = null;
+    for (let i = 0; i <= 18; i++) {
+      const v = i < 18 ? loadFor(p.id, i) : 0;
+      if (v > 100 && !run) run = { from: i, max: v };
+      else if (v > 100 && run) run.max = Math.max(run.max, v);
+      else if (v <= 100 && run) {
+        const det = breakdown(p.id, run.from).map(([tid,x]) => `${trackById(tid).name.split(' – ')[0].split(' (')[0]} ${x} %`).join(', ');
+        items.push({ level:'crit', html:`<b>${p.name}</b> er overbooket ${MONTHS[run.from].full}${run.from<i-1?' – '+MONTHS[i-1].full:''} (op til ${run.max} %). ${MONTHS[run.from].full}: ${det}.` });
+        run = null;
+      }
+    }
+  });
+  DEPS.forEach(dep => {
+    const st = depStatus(dep);
+    if (st === 'ok') return;
+    const F = depFrom(dep), T = depTo(dep);
+    if (!F || !T) return;
+    const a = F.ms.m, b = T.ms ? T.ms.m : T.t.from;
+    const toLbl = T.ms ? '"' + esc(T.ms.label) + '"' : 'start af ' + T.t.name;
+    if (st === 'conflict') items.push({ level:'crit', html:`<b>Afhængighedskonflikt:</b> "${esc(F.ms.label)}" (${MONTHS[a].full}) ligger EFTER ${toLbl} (${MONTHS[b].full}). Flyt en af dem.` });
+    else items.push({ level:'warn', html:`<b>Tæt afhængighed:</b> "${esc(F.ms.label)}" (${MONTHS[a].full}) ligger ≤ 1 md. før ${toLbl} (${MONTHS[b].full}) – ingen buffer hvis den skrider.` });
+  });
+  $('#warnings').innerHTML = items.length
+    ? `<ul class="warnlist">` + items.map(it => `<li class="${it.level}"><span class="ic">${it.level==='crit'?'▲':'◆'}</span><span>${it.html}</span></li>`).join('') + `</ul>`
+    : `<div class="allok">✓ Ingen overbookinger eller afhængighedskonflikter i den nuværende plan.</div>`;
+}
+
+/* ================== EDITORS ================== */
+function monthOptions(sel) {
+  return MONTHS.map((m,i) => `<option value="${i}" ${i===sel?'selected':''}>${m.full}</option>`).join('');
+}
+function renderMsEditor() {
+  const ownerOpts = sel => `<option value="">– (arver spor-ejer)</option>` +
+    PEOPLE.map(p => { const lbl = personDisp(p); return `<option value="${esc(lbl)}" ${lbl===sel?'selected':''}>${lbl}</option>`; }).join('');
+  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Punkt / milepæl</th><th>Måned</th><th>Ejer</th><th></th></tr></thead><tbody>`;
+  TRACKS.filter(t => !t.baseline).forEach(t => {
+    t.milestones.forEach(ms => {
+      html += `<tr>
+        <td style="white-space:nowrap;"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(${t.color});margin-right:5px;"></span>${t.name.split(' (')[0].split(' – ')[0]}</td>
+        <td><input type="text" value="${esc(ms.label)}" data-me="${ms.id}:label" style="width:200px"></td>
+        <td><select data-me="${ms.id}:m">${monthOptions(ms.m)}</select></td>
+        <td><select data-me="${ms.id}:owner">${ownerOpts(ms.owner)}</select></td>
+        <td><button class="mini-btn" data-mdel="${ms.id}" title="Slet punkt">✕</button></td></tr>`;
+    });
+  });
+  html += `</tbody></table>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:2px;">
+      <select id="msTrackSel">${TRACKS.filter(t=>!t.baseline).map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}</select>
+      <button class="add-btn" id="addMs" style="margin-top:0;">+ Tilføj punkt på dette spor</button>
+    </div>`;
+  $('#msEditor').innerHTML = html;
+  $('#msEditor').querySelectorAll('[data-me]').forEach(el => el.addEventListener('change', () => {
+    const idx = el.dataset.me.lastIndexOf(':');
+    const id = el.dataset.me.slice(0, idx), f = el.dataset.me.slice(idx+1);
+    const found = findMs(id); if (!found) return;
+    const ms = found.ms;
+    if (f === 'm') ms.m = Number(el.value);
+    else if (f === 'label') ms.label = el.value || 'Punkt';
+    else ms.owner = el.value;
+    DB.updMilestone(ms);
+    refresh(true);
+  }));
+  $('#msEditor').querySelectorAll('[data-mdel]').forEach(el => el.addEventListener('click', () => {
+    const id = el.dataset.mdel;
+    const found = findMs(id); if (!found) return;
+    found.t.milestones = found.t.milestones.filter(m => m.id !== id);
+    DEPS = DEPS.filter(d => d.fromMs !== id && d.toMs !== id);
+    DB.delMilestone(id);  /* DB kaskade-sletter selv afhængigheder */
+    refresh(true);
+  }));
+  $('#addMs').addEventListener('click', async () => {
+    const t = trackById($('#msTrackSel').value);
+    const ms = { m: 0, label: 'Nyt punkt', owner: '' };
+    await DB.addMilestone(t.id, ms);
+    t.milestones.push(ms);
+    refresh(true);
+  });
+}
+function renderAllocEditor() {
+  let html = `<table class="edit"><thead><tr><th>Person</th><th>Spor</th><th>Fra</th><th>Til</th><th>%</th><th></th></tr></thead><tbody>`;
+  ALLOC.forEach((a, i) => {
+    html += `<tr>
+      <td><select data-ae="${i}:p">${PEOPLE.map(p=>`<option value="${p.id}" ${p.id===a.p?'selected':''}>${personDisp(p)}</option>`).join('')}</select></td>
+      <td><select data-ae="${i}:t">${TRACKS.map(t=>`<option value="${t.id}" ${t.id===a.t?'selected':''}>${t.name}</option>`).join('')}</select></td>
+      <td><select data-ae="${i}:from">${monthOptions(a.from)}</select></td>
+      <td><select data-ae="${i}:to">${monthOptions(a.to)}</select></td>
+      <td><input type="number" min="0" max="150" step="5" value="${a.pct}" data-ae="${i}:pct"></td>
+      <td><button class="mini-btn" data-adel="${i}" title="Slet række">✕</button></td></tr>`;
+  });
+  html += `</tbody></table><button class="add-btn" id="addAlloc">+ Tilføj allokering</button>`;
+  $('#allocEditor').innerHTML = html;
+  $('#allocEditor').querySelectorAll('[data-ae]').forEach(el => el.addEventListener('change', () => {
+    const [i, f] = el.dataset.ae.split(':');
+    const a = ALLOC[+i];
+    if (f === 'pct') a.pct = Number(el.value) || 0;
+    else if (f === 'from' || f === 'to') a[f] = Number(el.value);
+    else a[f] = el.value;
+    if (a.from > a.to) a.to = a.from;
+    DB.updAlloc(a);
+    refresh(false);
+  }));
+  $('#allocEditor').querySelectorAll('[data-adel]').forEach(el => el.addEventListener('click', () => {
+    const a = ALLOC[+el.dataset.adel];
+    DB.delAlloc(a.id);
+    ALLOC.splice(+el.dataset.adel, 1);
+    refresh(true);
+  }));
+  $('#addAlloc').addEventListener('click', async () => {
+    const a = { p: PEOPLE[0] ? PEOPLE[0].id : 'gorm', t: 'drift', from: 0, to: 17, pct: 10 };
+    await DB.addAlloc(a);
+    ALLOC.push(a);
+    refresh(true);
+  });
+}
+function allMilestoneOpts(selId) {
+  return TRACKS.filter(t => t.milestones.length).map(t =>
+    t.milestones.map(ms => `<option value="${ms.id}" ${ms.id===selId?'selected':''}>${t.name.split(' – ')[0].split(' (')[0]}: ${esc(ms.label)}</option>`).join('')
+  ).join('');
+}
+function depTargetOpts(dep) {
+  return TRACKS.filter(t => !t.baseline).map(t => {
+    let o = `<option value="start:${t.id}" ${!dep.toMs && dep.toT===t.id?'selected':''}>${t.name.split(' – ')[0].split(' (')[0]}: (projektstart)</option>`;
+    o += t.milestones.map(ms => `<option value="ms:${ms.id}" ${dep.toMs===ms.id?'selected':''}>${t.name.split(' – ')[0].split(' (')[0]}: ${esc(ms.label)}</option>`).join('');
+    return o;
+  }).join('');
+}
+function renderDepEditor() {
+  let html = `<table class="edit"><thead><tr><th>Forudsætning (milepæl)</th><th>→ Afhængigt projekt / milepæl</th><th>Status</th><th></th></tr></thead><tbody>`;
+  DEPS.forEach(d => {
+    const st = depStatus(d);
+    const stTxt = st==='conflict' ? '<span style="color:var(--status-critical);font-weight:600;">▲ konflikt</span>' : st==='tight' ? '<span style="color:var(--text-secondary);">◆ tæt</span>' : '<span style="color:var(--good-text);">✓ ok</span>';
+    html += `<tr>
+      <td><select data-de="${d.id}:from">${allMilestoneOpts(d.fromMs)}</select></td>
+      <td><select data-de="${d.id}:to">${depTargetOpts(d)}</select></td>
+      <td>${stTxt}</td>
+      <td><button class="mini-btn" data-ddel="${d.id}" title="Slet">✕</button></td></tr>`;
+  });
+  html += `</tbody></table>`;
+  if (!DEPS.length) html += `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 2px 8px;">Ingen afhængigheder endnu – tilføj den første med knappen herunder. En afhængighed læses: “milepælen til venstre skal være nået, før projektet/milepælen til højre kan starte”.</div>`;
+  html += `<button class="add-btn" id="addDep">+ Tilføj afhængighed</button>`;
+  $('#depEditor').innerHTML = html;
+  $('#depEditor').querySelectorAll('[data-de]').forEach(el => el.addEventListener('change', () => {
+    const idx = el.dataset.de.lastIndexOf(':');
+    const id = el.dataset.de.slice(0, idx), side = el.dataset.de.slice(idx+1);
+    const d = DEPS.find(x => x.id === id); if (!d) return;
+    if (side === 'from') d.fromMs = el.value;
+    else if (el.value.startsWith('start:')) { d.toT = el.value.slice(6); d.toMs = null; }
+    else { const msId = el.value.slice(3); const f = findMs(msId); if (f) { d.toT = f.t.id; d.toMs = msId; } }
+    DB.updDep(d);
+    refresh(true);
+  }));
+  $('#depEditor').querySelectorAll('[data-ddel]').forEach(el => el.addEventListener('click', () => {
+    const id = el.dataset.ddel;
+    DB.delDep(id);
+    DEPS = DEPS.filter(x => x.id !== id);
+    refresh(true);
+  }));
+  $('#addDep').addEventListener('click', async () => {
+    const withMs = TRACKS.find(t => t.milestones.length);
+    if (!withMs) { toast('Opret et punkt først.'); return; }
+    const target = TRACKS.find(t => !t.baseline && t.id !== withMs.id) || withMs;
+    const d = { fromMs: withMs.milestones[0].id, toT: target.id, toMs: null };
+    await DB.addDep(d);
+    DEPS.push(d);
+    refresh(true);
+  });
+}
+
+/* ================== CONTROLS, AUTH & BOOT ================== */
+function fillFilters() {
+  const pf = $('#personFilter'), tf = $('#trackFilter');
+  pf.innerHTML = '<option value="">Alle</option>' + PEOPLE.map(p => `<option value="${p.id}">${personDisp(p)}</option>`).join('');
+  tf.innerHTML = '<option value="">Alle</option>' + TRACKS.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+  pf.value = state.person; tf.value = state.track;
+}
+function initControls() {
+  $('#personFilter').addEventListener('change', e => { state.person = e.target.value; refresh(false); });
+  $('#trackFilter').addEventListener('change', e => { state.track = e.target.value; refresh(false); });
+  $('#depToggle').addEventListener('change', e => { state.showDeps = e.target.checked; renderGantt(); });
+  $('#themeBtn').addEventListener('click', () => {
+    const cur = isDark() ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+    refresh(false);
+  });
+  $('#exportBtn').addEventListener('click', async () => {
+    const data = JSON.stringify({ horizon:'2026-07..2027-12', people:PEOPLE, tracks:TRACKS, allocations:ALLOC, dependencies:DEPS }, null, 2);
+    try { await navigator.clipboard.writeText(data); $('#exportBtn').textContent = 'Kopieret ✓'; }
+    catch { const b = new Blob([data], {type:'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href=u; a.download='teg-plan-data.json'; a.click(); }
+    setTimeout(() => $('#exportBtn').textContent = 'Kopiér data (JSON)', 1800);
+  });
+  $('#logoutBtn').addEventListener('click', async () => { if (sb) await sb.auth.signOut(); location.reload(); });
+  addEventListener('resize', () => renderGantt());
+  if (matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => refresh(false));
+}
+function refresh(rebuildEditors) {
+  renderTiles();
+  renderGantt();
+  renderHeat();
+  renderWarnings();
+  if (rebuildEditors) { renderMsEditor(); renderAllocEditor(); }
+  renderDepEditor(); /* status-kolonnen kan ændre sig ved alle redigeringer */
+}
+function startUI() {
+  fillFilters();
+  renderMsEditor();
+  renderAllocEditor();
+  refresh(false);
+}
+async function boot() {
+  if (booted) return; booted = true;
+  await loadAll();
+  subscribeRealtime();
+  $('#logoutBtn').style.display = '';
+  startUI();
+}
+function showLogin() {
+  const ov = $('#authOverlay');
+  ov.style.display = 'flex';
+  $('#authSend').addEventListener('click', async () => {
+    const email = $('#authEmail').value.trim();
+    if (!email) { $('#authMsg').textContent = 'Skriv en e-mail først.'; return; }
+    $('#authMsg').textContent = 'Sender…';
+    const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.href.split('#')[0] } });
+    $('#authMsg').textContent = error ? 'Fejl: ' + error.message : 'Tjek din indbakke og klik på linket.';
+  });
+}
+async function init() {
+  initControls();
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    $('#demoBanner').style.display = 'block';
+    seedDemo();
+    startUI();
+    return;
+  }
+  if (!window.supabase) {
+    $('#demoBanner').textContent = 'Kunne ikke indlæse Supabase-biblioteket (CDN blokeret?). Viser demo-data uden gem.';
+    $('#demoBanner').style.display = 'block';
+    seedDemo(); startUI(); return;
+  }
+  sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  sb.auth.onAuthStateChange((ev, session) => {
+    if (session) { $('#authOverlay').style.display = 'none'; boot(); }
+  });
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) { await boot(); } else showLogin();
+}
+init();
+</script>
+</body>
+</html>
