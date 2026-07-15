@@ -650,16 +650,17 @@ function monthOptions(sel) {
   return MONTHS.map((m,i) => `<option value="${i}" ${i===sel?'selected':''}>${m.full}</option>`).join('');
 }
 function renderMsEditor() {
-  const ownerOpts = sel => `<option value="">– (arver spor-ejer)</option>` +
-    PEOPLE.map(p => { const lbl = personDisp(p); return `<option value="${esc(lbl)}" ${lbl===sel?'selected':''}>${lbl}</option>`; }).join('');
-  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Punkt / milepæl</th><th>Måned</th><th>Ejer</th><th></th></tr></thead><tbody>`;
+  /* Ejer er fri tekst med navne-forslag — flere ejere adskilles med komma, fx "Gorm, Lasse".
+     Tomt felt = arver spor-ejeren. */
+  let html = `<datalist id="peopleList">${PEOPLE.map(p => `<option value="${esc(personDisp(p))}"></option>`).join('')}</datalist>
+    <table class="edit"><thead><tr><th>Spor</th><th>Punkt / milepæl</th><th>Måned</th><th>Ejer(e)</th><th></th></tr></thead><tbody>`;
   TRACKS.filter(t => !t.baseline).forEach(t => {
     t.milestones.forEach(ms => {
       html += `<tr>
         <td style="white-space:nowrap;"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(${t.color});margin-right:5px;"></span>${t.name.split(' (')[0].split(' – ')[0]}</td>
         <td><input type="text" value="${esc(ms.label)}" data-me="${ms.id}:label" style="width:200px"></td>
         <td><select data-me="${ms.id}:m">${monthOptions(ms.m)}</select></td>
-        <td><select data-me="${ms.id}:owner">${ownerOpts(ms.owner)}</select></td>
+        <td><input type="text" list="peopleList" value="${esc(ms.owner)}" data-me="${ms.id}:owner" style="width:130px" placeholder="– (arver spor-ejer)"></td>
         <td><button class="mini-btn" data-mdel="${ms.id}" title="Slet punkt">✕</button></td></tr>`;
     });
   });
