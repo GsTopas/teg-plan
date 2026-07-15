@@ -188,7 +188,6 @@
 
   <div id="demoBanner" style="display:none;margin:0 0 12px;padding:8px 14px;border:1px solid var(--status-warning);border-radius:10px;font-size:12.5px;color:var(--text-secondary);">Demo-tilstand: SUPABASE_URL / SUPABASE_ANON_KEY er ikke udfyldt øverst i filens script – data vises lokalt og gemmes <b>ikke</b>.</div>
 
-  <div class="tiles" id="tiles"></div>
 
   <div class="filters">
     <label>Person
@@ -317,7 +316,7 @@ async function loadAll() {
   ]);
   for (const r of [pe, tr, ms, al, de]) if (r.error) { toast('Kunne ikke hente data: ' + r.error.message); return; }
   PEOPLE = pe.data.map(r => ({ id:r.id, name:r.name, role:r.role }));
-  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:r.color, from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, milestones:[] }));
+  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:r.color, from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, milestones:[] }));
   ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, label:r.label, owner:r.owner }); });
   ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct }));
   DEPS = de.data.map(r => ({ id:r.id, fromMs:r.from_ms, toT:r.to_track, toMs:r.to_ms }));
@@ -427,27 +426,16 @@ function showTT(html, x, y) {
 }
 function hideTT(){ tt.style.display = 'none'; }
 
-/* ================== KPI-FLISER ================== */
-function renderTiles() {
-  const milestoneCount = TRACKS.reduce((s,t) => s + t.milestones.length, 0);
-  let over = 0;
-  PEOPLE.forEach(p => { for (let i=0;i<18;i++) if (loadFor(p.id,i) > 100) over++; });
-  const conflicts = DEPS.filter(d => depStatus(d) === 'conflict').length;
-  $('#tiles').innerHTML = `
-    <div class="tile"><div class="label">Spor i planen</div><div class="value">${TRACKS.length}</div><div class="sub">heraf ${TRACKS.filter(t=>t.ongoing).length} løbende</div></div>
-    <div class="tile"><div class="label">Milepæle i horisonten</div><div class="value">${milestoneCount}</div><div class="sub">jul 2026 – dec 2027</div></div>
-    <div class="tile"><div class="label">Personer / roller</div><div class="value">${PEOPLE.length}</div><div class="sub">inkl. eksterne</div></div>
-    <div class="tile"><div class="label">Overbookede person-måneder</div><div class="value ${over>0?'crit':'ok'}">${over}</div><div class="sub">${over>0?'se Advarsler':'ingen – fint!'}</div></div>
-    <div class="tile"><div class="label">Afhængigheder</div><div class="value ${conflicts>0?'crit':''}">${DEPS.length}</div><div class="sub">${conflicts>0? conflicts + ' konflikt(er)' : 'ingen konflikter'}</div></div>`;
-}
-
 /* ================== GANTT ================== */
 const G = { labelW: 250, rowH: 64, headH: 44 };
 function visibleTracks() {
   const key = t => {
     if (t.baseline) return [1, 99, 99];
     const lastMs = t.milestones.length ? Math.max(...t.milestones.map(m => m.m)) : t.solidTo;
-    return [0, t.solidTo + (t.ongoing ? 0.5 : 0), lastMs];
+    /* Manuel rækkefølge via plan_tracks.sort (lavest øverst); NULL falder tilbage
+       til automatisk sortering efter deadline, placeret efter de manuelt sorterede. */
+    if (t.sort != null) return [0, t.sort, lastMs];
+    return [0, 50 + t.solidTo + (t.ongoing ? 0.5 : 0), lastMs];
   };
   return TRACKS.slice().sort((a, b) => {
     const ka = key(a), kb = key(b);
@@ -825,7 +813,6 @@ function initControls() {
   if (matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => refresh(false));
 }
 function refresh(rebuildEditors) {
-  renderTiles();
   renderGantt();
   renderHeat();
   renderWarnings();
