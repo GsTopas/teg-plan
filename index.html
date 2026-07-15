@@ -163,6 +163,8 @@
   details.owner-pick summary::after { content: '▾'; position: absolute; right: 8px; top: 4px; color: var(--text-muted); font-size: 11px; }
   details.owner-pick .panel { position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; background: var(--surface-1); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 12px; box-shadow: 0 6px 20px rgba(0,0,0,.3); min-width: 180px; }
   details.owner-pick .panel label { display: flex; gap: 7px; align-items: center; font-size: 12.5px; padding: 3px 0; cursor: pointer; white-space: nowrap; }
+  details.owner-pick .panel label span { flex: 1; }
+  details.owner-pick .panel input[type=number] { width: 56px; margin-left: 10px; }
   .mini-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 5px; }
   .mini-btn:hover { color: var(--status-critical); background: color-mix(in srgb, var(--status-critical) 10%, transparent); }
   .add-btn { background: none; border: 1px dashed var(--axis); border-radius: 7px; color: var(--text-secondary); padding: 5px 12px; cursor: pointer; font-size: 12.5px; margin-top: 2px; }
@@ -237,12 +239,16 @@
   <section class="card">
     <h2>Redigér data</h2>
     <p class="desc">Ændringer slår igennem med det samme i tidslinje, heatmap og advarsler – og gemmes automatisk i databasen, så alle ser det samme.</p>
+    <details class="editor">
+      <summary><b>Spor (projekter)</b> (navn, periode, ejer)</summary>
+      <div id="trackEditor"></div>
+    </details>
     <details class="editor" open>
-      <summary><b>Punkter på tidslinjen</b> (milepæle: navn, måned, ejer)</summary>
+      <summary><b>Punkter / opgaver</b> (navn, periode, personer og %)</summary>
       <div id="msEditor"></div>
     </details>
     <details class="editor">
-      <summary><b>Allokeringer</b> (person → opgave, %)</summary>
+      <summary><b>Løbende allokering</b> (basisdrift og rækker uden punkt)</summary>
       <div id="allocEditor"></div>
     </details>
     <details class="editor" open>
@@ -335,6 +341,7 @@ const DB = {
   },
   updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner }).eq('id', ms.id)); },
   delMilestone(id) { if (sb) dbTry(sb.from('plan_milestones').delete().eq('id', id)); },
+  updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, from_m:t.from, solid_to:t.solidTo, to_m:t.to }).eq('id', t.id)); },
   async addAlloc(a) {
     if (!sb) { a.id = locId(); return; }
     const per = allocPeriod(a);
@@ -666,17 +673,24 @@ function monthOptions(sel) {
   return MONTHS.map((m,i) => `<option value="${i}" ${i===sel?'selected':''}>${m.full}</option>`).join('');
 }
 function renderMsEditor() {
-  /* Ejer(e): afkrydsnings-dropdown — flere personer kan sættes på samme punkt.
-     Gemmes som komma-separeret tekst; ingen valgte = arver spor-ejeren. */
-  const ownerPick = ms => {
-    const chosen = (ms.owner || '').split(',').map(s => s.trim()).filter(Boolean);
-    const boxes = PEOPLE.map(p => {
-      const lbl = personDisp(p);
-      return `<label><input type="checkbox" data-mo="${ms.id}" value="${esc(lbl)}" ${chosen.includes(lbl)?'checked':''}>${esc(lbl)}</label>`;
-    }).join('');
-    return `<details class="owner-pick"><summary>${chosen.length ? esc(chosen.join(', ')) : '– (arver spor-ejer)'}</summary><div class="panel">${boxes}</div></details>`;
+  /* Personer & %: afkrydsning + procent pr. person — skaber/sletter allokeringer
+     knyttet til punktet. Punktets ejer-tekst (labels på tidslinjen) synkroniseres automatisk. */
+  const msAllocs = ms => ALLOC.filter(a => a.msId === ms.id);
+  const allocSummary = ms => {
+    const cur = msAllocs(ms);
+    if (cur.length) return cur.map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ');
+    return ms.owner ? esc(ms.owner) + ' (uden %)' : '– (ingen endnu)';
   };
-  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Punkt / opgave</th><th>Fra</th><th>Deadline</th><th>Ejer(e)</th><th></th></tr></thead><tbody>`;
+  const allocPick = ms => {
+    const cur = msAllocs(ms);
+    const rows = PEOPLE.map(p => {
+      const a = cur.find(x => x.p === p.id);
+      return `<label><input type="checkbox" data-mac="${ms.id}:${p.id}" ${a?'checked':''}><span>${esc(personDisp(p))}</span>
+        <input type="number" min="0" max="150" step="5" value="${a?a.pct:20}" data-map="${ms.id}:${p.id}" ${a?'':'disabled'}> %</label>`;
+    }).join('');
+    return `<details class="owner-pick"><summary>${allocSummary(ms)}</summary><div class="panel">${rows}</div></details>`;
+  };
+  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Punkt / opgave</th><th>Fra</th><th>Deadline</th><th>Personer & %</th><th></th></tr></thead><tbody>`;
   TRACKS.filter(t => !t.baseline).forEach(t => {
     t.milestones.forEach(ms => {
       html += `<tr>
@@ -684,7 +698,7 @@ function renderMsEditor() {
         <td><input type="text" value="${esc(ms.label)}" data-me="${ms.id}:label" style="width:200px"></td>
         <td><select data-me="${ms.id}:from">${monthOptions(ms.from)}</select></td>
         <td><select data-me="${ms.id}:m">${monthOptions(ms.m)}</select></td>
-        <td>${ownerPick(ms)}</td>
+        <td>${allocPick(ms)}</td>
         <td><button class="mini-btn" data-mdel="${ms.id}" title="Slet punkt">✕</button></td></tr>`;
     });
   });
@@ -706,16 +720,41 @@ function renderMsEditor() {
     DB.updMilestone(ms);
     refresh(true);
   }));
-  $('#msEditor').querySelectorAll('[data-mo]').forEach(cb => cb.addEventListener('change', () => {
-    const found = findMs(cb.dataset.mo); if (!found) return;
-    const ms = found.ms;
-    const picked = [...$('#msEditor').querySelectorAll(`[data-mo="${cb.dataset.mo}"]`)]
-      .filter(c => c.checked).map(c => c.value);
-    ms.owner = picked.join(', ');
+  const syncMsOwner = ms => {
+    ms.owner = msAllocs(ms).map(a => (personById(a.p)||{name:a.p}).name).join(', ');
     DB.updMilestone(ms);
-    /* opdater kun summary-teksten — fuld genopbygning ville lukke popup'en */
-    cb.closest('details.owner-pick').querySelector('summary').textContent =
-      picked.length ? picked.join(', ') : '– (arver spor-ejer)';
+  };
+  /* opdater kun summary-teksten efter valg — fuld genopbygning ville lukke popup'en */
+  const updSummary = (el, ms) => {
+    el.closest('details.owner-pick').querySelector('summary').textContent =
+      msAllocs(ms).length ? msAllocs(ms).map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ') : '– (ingen endnu)';
+  };
+  $('#msEditor').querySelectorAll('[data-mac]').forEach(cb => cb.addEventListener('change', async () => {
+    const [msId, pid] = cb.dataset.mac.split(':');
+    const found = findMs(msId); if (!found) return;
+    const ms = found.ms;
+    const pctInput = $('#msEditor').querySelector(`[data-map="${msId}:${pid}"]`);
+    if (cb.checked) {
+      const a = { p: pid, t: found.t.id, msId: msId, from: ms.from, to: ms.m, pct: Number(pctInput.value) || 20 };
+      await DB.addAlloc(a);
+      ALLOC.push(a);
+      pctInput.disabled = false;
+    } else {
+      const a = ALLOC.find(x => x.msId === msId && x.p === pid);
+      if (a) { DB.delAlloc(a.id); ALLOC = ALLOC.filter(x => x !== a); }
+      pctInput.disabled = true;
+    }
+    syncMsOwner(ms);
+    updSummary(cb, ms);
+    refresh(false);
+  }));
+  $('#msEditor').querySelectorAll('[data-map]').forEach(inp => inp.addEventListener('change', () => {
+    const [msId, pid] = inp.dataset.map.split(':');
+    const a = ALLOC.find(x => x.msId === msId && x.p === pid); if (!a) return;
+    a.pct = Number(inp.value) || 0;
+    DB.updAlloc(a);
+    const found = findMs(msId);
+    if (found) { syncMsOwner(found.ms); updSummary(inp, found.ms); }
     refresh(false);
   }));
   $('#msEditor').querySelectorAll('[data-mdel]').forEach(el => el.addEventListener('click', () => {
@@ -723,7 +762,8 @@ function renderMsEditor() {
     const found = findMs(id); if (!found) return;
     found.t.milestones = found.t.milestones.filter(m => m.id !== id);
     DEPS = DEPS.filter(d => d.fromMs !== id && d.toMs !== id);
-    DB.delMilestone(id);  /* DB kaskade-sletter selv afhængigheder */
+    ALLOC = ALLOC.filter(a => a.msId !== id);
+    DB.delMilestone(id);  /* DB kaskade-sletter selv afhængigheder og allokeringer */
     refresh(true);
   }));
   $('#addMs').addEventListener('click', async () => {
@@ -734,9 +774,33 @@ function renderMsEditor() {
     refresh(true);
   });
 }
+function renderTrackEditor() {
+  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Fra</th><th>Til</th><th>Ejer</th></tr></thead><tbody>`;
+  visibleTracks().forEach(t => {
+    html += `<tr>
+      <td style="white-space:nowrap;"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(${t.color});margin-right:5px;"></span><input type="text" value="${esc(t.name)}" data-te="${t.id}:name" style="width:230px"></td>
+      <td><select data-te="${t.id}:from">${monthOptions(t.from)}</select></td>
+      <td><select data-te="${t.id}:solidTo">${monthOptions(t.solidTo)}</select></td>
+      <td><input type="text" value="${esc(t.owner)}" data-te="${t.id}:owner" style="width:120px"></td></tr>`;
+  });
+  html += `</tbody></table><div style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">Nye spor, farver og rækkefølge oprettes/ændres i Supabase Table Editor (tabellen plan_tracks).</div>`;
+  $('#trackEditor').innerHTML = html;
+  $('#trackEditor').querySelectorAll('[data-te]').forEach(el => el.addEventListener('change', () => {
+    const idx = el.dataset.te.lastIndexOf(':');
+    const id = el.dataset.te.slice(0, idx), f = el.dataset.te.slice(idx+1);
+    const t = trackById(id); if (!t) return;
+    if (f === 'from') { t.from = Number(el.value); if (t.from > t.solidTo) t.solidTo = t.from; }
+    else if (f === 'solidTo') { t.solidTo = Number(el.value); if (t.solidTo < t.from) t.from = t.solidTo; }
+    else t[f] = el.value;
+    /* løbende spor vises horisonten ud; afsluttede spor slutter ved 'Til' */
+    t.to = t.ongoing ? Math.max(t.to, t.solidTo) : t.solidTo;
+    DB.updTrack(t);
+    refresh(true);
+  }));
+}
 function renderAllocEditor() {
-  /* Allokering pr. opgave: vælg et punkt, og perioden følger punktets start→deadline.
-     Basisdrift-spor (og gamle rækker uden punkt) har fri periode med egne fra/til-felter. */
+  /* Viser kun løbende/fri rækker (uden punkt) — punkt-allokeringer styres i punkt-editoren.
+     Vælg et punkt i dropdown'en for at konvertere en gammel række til en opgave-allokering. */
   const trackShort = t => t.name.split(' – ')[0].split(' (')[0];
   const taskOpts = a => {
     let o = '';
@@ -753,6 +817,7 @@ function renderAllocEditor() {
   };
   let html = `<table class="edit"><thead><tr><th>Person</th><th>Opgave</th><th>Periode</th><th>%</th><th></th></tr></thead><tbody>`;
   ALLOC.forEach((a, i) => {
+    if (a.msId) return; /* punkt-allokeringer redigeres i punkt-editoren */
     const per = allocPeriod(a);
     const perCell = a.msId
       ? `<span style="color:var(--text-secondary);">${MONTHS[per.from].full} – ${MONTHS[per.to].full} <span style="color:var(--text-muted);">(følger punktet)</span></span>`
@@ -791,13 +856,8 @@ function renderAllocEditor() {
     refresh(true);
   }));
   $('#addAlloc').addEventListener('click', async () => {
-    let firstMs = null, firstTrack = null;
-    for (const t of TRACKS.filter(t => !t.baseline)) {
-      if (t.milestones.length) { firstMs = t.milestones[0]; firstTrack = t; break; }
-    }
-    const a = firstMs
-      ? { p: PEOPLE[0] ? PEOPLE[0].id : 'gorm', t: firstTrack.id, msId: firstMs.id, from: firstMs.from, to: firstMs.m, pct: 10 }
-      : { p: PEOPLE[0] ? PEOPLE[0].id : 'gorm', t: 'drift', msId: null, from: 0, to: 17, pct: 10 };
+    const base = TRACKS.find(t => t.baseline) || TRACKS[0];
+    const a = { p: PEOPLE[0] ? PEOPLE[0].id : 'gorm', t: base ? base.id : 'drift', msId: null, from: 0, to: 17, pct: 10 };
     await DB.addAlloc(a);
     ALLOC.push(a);
     refresh(true);
@@ -887,7 +947,7 @@ function refresh(rebuildEditors) {
   renderGantt();
   renderHeat();
   renderWarnings();
-  if (rebuildEditors) { renderMsEditor(); renderAllocEditor(); }
+  if (rebuildEditors) { renderTrackEditor(); renderMsEditor(); renderAllocEditor(); }
   renderDepEditor(); /* status-kolonnen kan ændre sig ved alle redigeringer */
 }
 function startUI() {
@@ -895,6 +955,7 @@ function startUI() {
   document.addEventListener('click', e => {
     document.querySelectorAll('details.owner-pick[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open'); });
   });
+  renderTrackEditor();
   renderMsEditor();
   renderAllocEditor();
   refresh(false);
