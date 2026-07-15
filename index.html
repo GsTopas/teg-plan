@@ -242,7 +242,7 @@
       <div id="msEditor"></div>
     </details>
     <details class="editor">
-      <summary><b>Allokeringer</b> (person → spor, periode, %)</summary>
+      <summary><b>Allokeringer</b> (person → opgave, %)</summary>
       <div id="allocEditor"></div>
     </details>
     <details class="editor" open>
@@ -323,24 +323,25 @@ async function loadAll() {
   for (const r of [pe, tr, ms, al, de]) if (r.error) { toast('Kunne ikke hente data: ' + r.error.message); return; }
   PEOPLE = pe.data.map(r => ({ id:r.id, name:r.name, role:r.role }));
   TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:r.color, from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, milestones:[] }));
-  ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, label:r.label, owner:r.owner }); });
-  ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct }));
+  ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner }); });
+  ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct, msId:r.milestone_id || null }));
   DEPS = de.data.map(r => ({ id:r.id, fromMs:r.from_ms, toT:r.to_track, toMs:r.to_ms }));
 }
 const DB = {
   async addMilestone(tid, ms) {
     if (!sb) { ms.id = locId(); return; }
-    const d = await dbTry(sb.from('plan_milestones').insert({ track_id:tid, m:ms.m, label:ms.label, owner:ms.owner }).select().single());
+    const d = await dbTry(sb.from('plan_milestones').insert({ track_id:tid, m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner }).select().single());
     ms.id = d ? d.id : locId();
   },
-  updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, label:ms.label, owner:ms.owner }).eq('id', ms.id)); },
+  updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner }).eq('id', ms.id)); },
   delMilestone(id) { if (sb) dbTry(sb.from('plan_milestones').delete().eq('id', id)); },
   async addAlloc(a) {
     if (!sb) { a.id = locId(); return; }
-    const d = await dbTry(sb.from('plan_allocations').insert({ person_id:a.p, track_id:a.t, from_m:a.from, to_m:a.to, pct:a.pct }).select().single());
+    const per = allocPeriod(a);
+    const d = await dbTry(sb.from('plan_allocations').insert({ person_id:a.p, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).select().single());
     a.id = d ? d.id : locId();
   },
-  updAlloc(a) { if (sb) dbTry(sb.from('plan_allocations').update({ person_id:a.p, track_id:a.t, from_m:a.from, to_m:a.to, pct:a.pct }).eq('id', a.id)); },
+  updAlloc(a) { if (sb) { const per = allocPeriod(a); dbTry(sb.from('plan_allocations').update({ person_id:a.p, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).eq('id', a.id)); } },
   delAlloc(id) { if (sb) dbTry(sb.from('plan_allocations').delete().eq('id', id)); },
   async addDep(d0) {
     if (!sb) { d0.id = locId(); return; }
@@ -391,12 +392,19 @@ function depStatus(d) {
   if (b - a <= 1) return 'tight';
   return 'ok';
 }
+/* Perioden for en allokering: knyttet til et punkt = punktets start→deadline;
+   ellers rækkens egen fra/til (løbende allokering). */
+function allocPeriod(a) {
+  if (a.msId) { const f = findMs(a.msId); if (f) return { from: f.ms.from, to: f.ms.m }; }
+  return { from: a.from, to: a.to };
+}
 function loadFor(personId, monthIdx, trackId) {
   let sum = 0;
   for (const a of ALLOC) {
     if (a.p !== personId) continue;
     if (trackId && a.t !== trackId) continue;
-    if (monthIdx >= a.from && monthIdx <= a.to) sum += Number(a.pct) || 0;
+    const per = allocPeriod(a);
+    if (monthIdx >= per.from && monthIdx <= per.to) sum += Number(a.pct) || 0;
   }
   return sum;
 }
@@ -404,7 +412,8 @@ function breakdown(personId, monthIdx) {
   const map = {};
   for (const a of ALLOC) {
     if (a.p !== personId) continue;
-    if (monthIdx >= a.from && monthIdx <= a.to) map[a.t] = (map[a.t]||0) + (Number(a.pct)||0);
+    const per = allocPeriod(a);
+    if (monthIdx >= per.from && monthIdx <= per.to) map[a.t] = (map[a.t]||0) + (Number(a.pct)||0);
   }
   return Object.entries(map).filter(([,v]) => v > 0);
 }
@@ -667,12 +676,13 @@ function renderMsEditor() {
     }).join('');
     return `<details class="owner-pick"><summary>${chosen.length ? esc(chosen.join(', ')) : '– (arver spor-ejer)'}</summary><div class="panel">${boxes}</div></details>`;
   };
-  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Punkt / milepæl</th><th>Måned</th><th>Ejer(e)</th><th></th></tr></thead><tbody>`;
+  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Punkt / opgave</th><th>Fra</th><th>Deadline</th><th>Ejer(e)</th><th></th></tr></thead><tbody>`;
   TRACKS.filter(t => !t.baseline).forEach(t => {
     t.milestones.forEach(ms => {
       html += `<tr>
         <td style="white-space:nowrap;"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(${t.color});margin-right:5px;"></span>${t.name.split(' (')[0].split(' – ')[0]}</td>
         <td><input type="text" value="${esc(ms.label)}" data-me="${ms.id}:label" style="width:200px"></td>
+        <td><select data-me="${ms.id}:from">${monthOptions(ms.from)}</select></td>
         <td><select data-me="${ms.id}:m">${monthOptions(ms.m)}</select></td>
         <td>${ownerPick(ms)}</td>
         <td><button class="mini-btn" data-mdel="${ms.id}" title="Slet punkt">✕</button></td></tr>`;
@@ -689,7 +699,8 @@ function renderMsEditor() {
     const id = el.dataset.me.slice(0, idx), f = el.dataset.me.slice(idx+1);
     const found = findMs(id); if (!found) return;
     const ms = found.ms;
-    if (f === 'm') ms.m = Number(el.value);
+    if (f === 'm') { ms.m = Number(el.value); if (ms.from > ms.m) ms.from = ms.m; }
+    else if (f === 'from') { ms.from = Number(el.value); if (ms.from > ms.m) ms.m = ms.from; }
     else if (f === 'label') ms.label = el.value || 'Punkt';
     else ms.owner = el.value;
     DB.updMilestone(ms);
@@ -717,20 +728,39 @@ function renderMsEditor() {
   }));
   $('#addMs').addEventListener('click', async () => {
     const t = trackById($('#msTrackSel').value);
-    const ms = { m: 0, label: 'Nyt punkt', owner: '' };
+    const ms = { m: 0, from: 0, label: 'Nyt punkt', owner: '' };
     await DB.addMilestone(t.id, ms);
     t.milestones.push(ms);
     refresh(true);
   });
 }
 function renderAllocEditor() {
-  let html = `<table class="edit"><thead><tr><th>Person</th><th>Spor</th><th>Fra</th><th>Til</th><th>%</th><th></th></tr></thead><tbody>`;
+  /* Allokering pr. opgave: vælg et punkt, og perioden følger punktets start→deadline.
+     Basisdrift-spor (og gamle rækker uden punkt) har fri periode med egne fra/til-felter. */
+  const trackShort = t => t.name.split(' – ')[0].split(' (')[0];
+  const taskOpts = a => {
+    let o = '';
+    const cur = trackById(a.t);
+    if (!a.msId && cur && !cur.baseline)
+      o += `<option value="t:${cur.id}" selected>${trackShort(cur)}: (fri periode – vælg evt. et punkt)</option>`;
+    TRACKS.filter(t => !t.baseline && t.milestones.length).forEach(t => {
+      o += t.milestones.map(ms => `<option value="ms:${ms.id}" ${a.msId===ms.id?'selected':''}>${trackShort(t)}: ${esc(ms.label)}</option>`).join('');
+    });
+    TRACKS.filter(t => t.baseline).forEach(t => {
+      o += `<option value="t:${t.id}" ${!a.msId && a.t===t.id?'selected':''}>${trackShort(t)} (løbende)</option>`;
+    });
+    return o;
+  };
+  let html = `<table class="edit"><thead><tr><th>Person</th><th>Opgave</th><th>Periode</th><th>%</th><th></th></tr></thead><tbody>`;
   ALLOC.forEach((a, i) => {
+    const per = allocPeriod(a);
+    const perCell = a.msId
+      ? `<span style="color:var(--text-secondary);">${MONTHS[per.from].full} – ${MONTHS[per.to].full} <span style="color:var(--text-muted);">(følger punktet)</span></span>`
+      : `<select data-ae="${i}:from">${monthOptions(a.from)}</select> – <select data-ae="${i}:to">${monthOptions(a.to)}</select>`;
     html += `<tr>
       <td><select data-ae="${i}:p">${PEOPLE.map(p=>`<option value="${p.id}" ${p.id===a.p?'selected':''}>${personDisp(p)}</option>`).join('')}</select></td>
-      <td><select data-ae="${i}:t">${TRACKS.map(t=>`<option value="${t.id}" ${t.id===a.t?'selected':''}>${t.name}</option>`).join('')}</select></td>
-      <td><select data-ae="${i}:from">${monthOptions(a.from)}</select></td>
-      <td><select data-ae="${i}:to">${monthOptions(a.to)}</select></td>
+      <td><select data-ae="${i}:task">${taskOpts(a)}</select></td>
+      <td style="white-space:nowrap;font-size:12.5px;">${perCell}</td>
       <td><input type="number" min="0" max="150" step="5" value="${a.pct}" data-ae="${i}:pct"></td>
       <td><button class="mini-btn" data-adel="${i}" title="Slet række">✕</button></td></tr>`;
   });
@@ -741,10 +771,18 @@ function renderAllocEditor() {
     const a = ALLOC[+i];
     if (f === 'pct') a.pct = Number(el.value) || 0;
     else if (f === 'from' || f === 'to') a[f] = Number(el.value);
+    else if (f === 'task') {
+      const v = el.value;
+      if (v.startsWith('ms:')) {
+        a.msId = v.slice(3);
+        const fnd = findMs(a.msId);
+        if (fnd) a.t = fnd.t.id;
+      } else { a.msId = null; a.t = v.slice(2); }
+    }
     else a[f] = el.value;
     if (a.from > a.to) a.to = a.from;
     DB.updAlloc(a);
-    refresh(false);
+    refresh(f === 'task'); /* opgave-skift ændrer Periode-cellen → genbyg editoren */
   }));
   $('#allocEditor').querySelectorAll('[data-adel]').forEach(el => el.addEventListener('click', () => {
     const a = ALLOC[+el.dataset.adel];
@@ -753,7 +791,13 @@ function renderAllocEditor() {
     refresh(true);
   }));
   $('#addAlloc').addEventListener('click', async () => {
-    const a = { p: PEOPLE[0] ? PEOPLE[0].id : 'gorm', t: 'drift', from: 0, to: 17, pct: 10 };
+    let firstMs = null, firstTrack = null;
+    for (const t of TRACKS.filter(t => !t.baseline)) {
+      if (t.milestones.length) { firstMs = t.milestones[0]; firstTrack = t; break; }
+    }
+    const a = firstMs
+      ? { p: PEOPLE[0] ? PEOPLE[0].id : 'gorm', t: firstTrack.id, msId: firstMs.id, from: firstMs.from, to: firstMs.m, pct: 10 }
+      : { p: PEOPLE[0] ? PEOPLE[0].id : 'gorm', t: 'drift', msId: null, from: 0, to: 17, pct: 10 };
     await DB.addAlloc(a);
     ALLOC.push(a);
     refresh(true);
