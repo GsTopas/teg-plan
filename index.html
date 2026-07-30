@@ -450,7 +450,7 @@ function showTT(html, x, y) {
 function hideTT(){ tt.style.display = 'none'; }
 
 /* ================== GANTT ================== */
-const G = { labelW: 250, rowH: 64, headH: 44 };
+const G = { labelW: 250, rowH: 82, headH: 44 };
 function visibleTracks() {
   const key = t => {
     if (t.baseline) return [1, 99, 99];
@@ -524,21 +524,26 @@ function renderGantt() {
     if (t.beyond) {
       html += `<div style="position:absolute;right:8px;top:${barY-13}px;font-size:10px;color:var(--text-muted);">${t.beyond} →</div>`;
     }
-    const lineEnd = [-1e9, -1e9];
+    const lineEnd = [-1e9, -1e9, -1e9];
     const msSorted = t.milestones.slice().sort((a,b) => a.m - b.m);
     msSorted.forEach(ms => {
       const mx = G.labelW + (ms.m + 0.5) * colW;
+      /* periode-streg: opgavens udstrækning fra start-måned frem til deadline-ruden */
+      if (ms.from < ms.m) {
+        const px1 = G.labelW + ms.from * colW + 2;
+        html += `<div style="position:absolute;left:${px1}px;top:${barY+12}px;width:${mx-px1}px;height:3px;border-radius:2px;background:${col};opacity:.55;"></div>`;
+      }
       html += `<div data-ms="${ms.id}" tabindex="0" style="position:absolute;left:${mx-5}px;top:${barY-0.5}px;width:11px;height:11px;background:${col};transform:rotate(45deg);border:2px solid var(--surface-1);border-radius:2px;cursor:default;"></div>`;
       const ownerSuffix = ms.owner ? ' · ' + ms.owner : '';
       const text = ms.label + ' · ' + MONTHS[ms.m].full + ownerSuffix;
       const estW = text.length * 5.6;
       const rightAlign = ms.m > 14;
       let lblStart = rightAlign ? mx + 40 - estW : Math.max(G.labelW, mx - 46);
-      let line;
-      if (lblStart >= lineEnd[0] + 8) line = 0;
-      else if (lblStart >= lineEnd[1] + 8) line = 1;
-      else { line = lineEnd[0] <= lineEnd[1] ? 0 : 1; lblStart = lineEnd[line] + 8; }
-      const yLbl = barY + 16 + line * 15;
+      /* kollision: stabl lodret på op til 3 linjer under ruden — forskyd kun vandret som sidste udvej,
+         ellers ender labelen under en anden rude end sin egen */
+      let line = lineEnd.findIndex(e => lblStart >= e + 8);
+      if (line === -1) { line = lineEnd.indexOf(Math.min(...lineEnd)); lblStart = lineEnd[line] + 8; }
+      const yLbl = barY + 19 + line * 13;
       const align = rightAlign ? `right:${W - mx - 40}px;text-align:right;` : `left:${lblStart}px;`;
       html += `<div style="position:absolute;${align}top:${yLbl}px;font-size:10px;line-height:1.25;color:var(--text-secondary);white-space:nowrap;">${esc(ms.label)}<span style="color:var(--text-muted);"> · ${MONTHS[ms.m].full}${ownerSuffix}</span></div>`;
       lineEnd[line] = lblStart + estW;
@@ -577,10 +582,14 @@ function renderGantt() {
     const { t, ms } = found;
     const depsIn = DEPS.filter(d => d.toMs === ms.id || (!d.toMs && d.toT === t.id && ms.m === t.from));
     const depsOut = DEPS.filter(d => d.fromMs === ms.id);
+    const msAl = ALLOC.filter(a => a.msId === ms.id);
+    const persons = msAl.length
+      ? msAl.map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ')
+      : (ms.owner || t.owner);
     const html2 = `<div class="tt-title">◆ ${esc(ms.label)}</div>
       <div class="tt-row"><span>Spor</span><b>${t.name}</b></div>
-      <div class="tt-row"><span>Måned</span><b>${MONTHS[ms.m].full}</b></div>
-      <div class="tt-row"><span>Ejer</span><b>${esc(ms.owner || t.owner)}</b></div>
+      <div class="tt-row"><span>Periode</span><b>${ms.from < ms.m ? MONTHS[ms.from].full + ' – ' + MONTHS[ms.m].full : MONTHS[ms.m].full}</b></div>
+      <div class="tt-row"><span>Personer</span><b>${esc(persons)}</b></div>
       ${depsOut.map(d => { const T = depTo(d); return T ? `<div class="tt-row"><span>Forudsætning for</span><b>${T.ms ? esc(T.ms.label) : T.t.name}</b></div>` : ''; }).join('')}
       ${depsIn.map(d => { const F = depFrom(d); return F ? `<div class="tt-row"><span>Afhænger af</span><b>${esc(F.ms.label)}</b></div>` : ''; }).join('')}`;
     el.addEventListener('mousemove', e => showTT(html2, e.clientX, e.clientY));
