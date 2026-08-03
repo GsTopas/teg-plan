@@ -501,7 +501,7 @@ function renderGantt() {
   const plotW = W - G.labelW;
   const colW = plotW / 18;
   /* Dynamisk rækkehøjde: hvert spor har en slank samle-linje + én sub-række pr. opgave */
-  const SUBH = 21, GHEAD = 27, GPAD = 9;
+  const SUBH = 33, GHEAD = 25, GPAD = 7;
   const geo = tracks.map(t => ({ t, h: t.baseline ? 40 : GHEAD + t.milestones.length * SUBH + GPAD }));
   { let acc = G.headH; geo.forEach(g => { g.y = acc; acc += g.h; }); }
   const H = (geo.length ? geo[geo.length-1].y + geo[geo.length-1].h : G.headH) + 16;
@@ -551,17 +551,17 @@ function renderGantt() {
         const bx1 = G.labelW + ms.from * colW + 2;
         const bx2 = G.labelW + (ms.m + 1) * colW - 2;
         const mx = G.labelW + (ms.m + 0.5) * colW;
-        msY[ms.id] = y + rowY + 10;
-        html += `<div style="position:absolute;left:${bx1}px;top:${rowY+4}px;width:${bx2-bx1}px;height:12px;border-radius:6px;background:${col};opacity:.30;"></div>`;
-        html += `<div data-ms="${ms.id}" tabindex="0" style="position:absolute;left:${mx-5}px;top:${rowY+4.5}px;width:11px;height:11px;background:${col};transform:rotate(45deg);border:2px solid var(--surface-1);border-radius:2px;cursor:default;"></div>`;
+        msY[ms.id] = y + rowY + 21;
         const msAl = ALLOC.filter(a => a.msId === ms.id);
         const who = msAl.length ? msAl.map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ') : (ms.owner || '');
         const txt = `${esc(ms.label)}${who ? `<span style="color:var(--text-muted);"> · ${esc(who)}</span>` : ''}`;
+        /* label OVER bjælken, venstrestillet ved dens start — klemt inden for plottet,
+           så lange tekster på sene opgaver ikke ryger ud over højre kant */
         const estW = (ms.label.length + (who ? who.length + 3 : 0)) * 5.9;
-        if (bx2 + 10 + estW < W - 6)
-          html += `<div style="position:absolute;left:${bx2+10}px;top:${rowY+4}px;font-size:10.5px;color:var(--text-secondary);white-space:nowrap;">${txt}</div>`;
-        else
-          html += `<div style="position:absolute;right:${W-bx1+10}px;top:${rowY+4}px;font-size:10.5px;color:var(--text-secondary);white-space:nowrap;text-align:right;">${txt}</div>`;
+        const lblX = Math.max(G.labelW + 2, Math.min(bx1 + 1, W - estW - 8));
+        html += `<div style="position:absolute;left:${lblX}px;top:${rowY+1}px;font-size:10.5px;color:var(--text-secondary);white-space:nowrap;">${txt}</div>`;
+        html += `<div style="position:absolute;left:${bx1}px;top:${rowY+15}px;width:${bx2-bx1}px;height:12px;border-radius:6px;background:${col};opacity:.30;"></div>`;
+        html += `<div data-ms="${ms.id}" tabindex="0" style="position:absolute;left:${mx-5}px;top:${rowY+15.5}px;width:11px;height:11px;background:${col};transform:rotate(45deg);border:2px solid var(--surface-1);border-radius:2px;cursor:default;"></div>`;
       });
     }
     html += `</div>`;
