@@ -308,11 +308,6 @@ let PEOPLE = [], TRACKS = [], ALLOC = [], DEPS = [];
 let sb = null, localSeq = 0, booted = false;
 const locId = () => 'loc-' + (++localSeq);
 
-function seedDemo() {
-  /* Demo-seed er fjernet i den hostede udgave — data hentes fra Supabase efter login. */
-  PEOPLE = []; TRACKS = []; ALLOC = []; DEPS = [];
-}
-
 /* ================== SUPABASE: LOAD & GEM ================== */
 function toast(msg) {
   const el = $('#toast');
@@ -321,7 +316,14 @@ function toast(msg) {
 }
 async function dbTry(q) {
   const { data, error } = await q;
-  if (error) { console.error(error); toast('Kunne ikke gemme: ' + error.message); return null; }
+  if (error) {
+    console.error(error);
+    toast('Kunne ikke gemme: ' + error.message + ' — genindlæser.');
+    /* genindlæs så skærmen viser databasens faktiske tilstand frem for den fejlede ændring */
+    await loadAll();
+    refresh(!document.querySelector('details.owner-pick[open]'));
+    return null;
+  }
   return data;
 }
 async function loadAll() {
@@ -341,25 +343,31 @@ async function loadAll() {
 }
 const DB = {
   async addMilestone(tid, ms) {
-    if (!sb) { ms.id = locId(); return; }
+    if (!sb) { ms.id = locId(); return true; }
     const d = await dbTry(sb.from('plan_milestones').insert({ track_id:tid, m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner }).select().single());
-    ms.id = d ? d.id : locId();
+    if (!d) return false;
+    ms.id = d.id;
+    return true;
   },
   updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner }).eq('id', ms.id)); },
   delMilestone(id) { if (sb) dbTry(sb.from('plan_milestones').delete().eq('id', id)); },
   updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, from_m:t.from, solid_to:t.solidTo, to_m:t.to }).eq('id', t.id)); },
   async addAlloc(a) {
-    if (!sb) { a.id = locId(); return; }
+    if (!sb) { a.id = locId(); return true; }
     const per = allocPeriod(a);
     const d = await dbTry(sb.from('plan_allocations').insert({ person_id:a.p, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).select().single());
-    a.id = d ? d.id : locId();
+    if (!d) return false;
+    a.id = d.id;
+    return true;
   },
   updAlloc(a) { if (sb) { const per = allocPeriod(a); dbTry(sb.from('plan_allocations').update({ person_id:a.p, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).eq('id', a.id)); } },
   delAlloc(id) { if (sb) dbTry(sb.from('plan_allocations').delete().eq('id', id)); },
   async addDep(d0) {
-    if (!sb) { d0.id = locId(); return; }
+    if (!sb) { d0.id = locId(); return true; }
     const d = await dbTry(sb.from('plan_dependencies').insert({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs }).select().single());
-    d0.id = d ? d.id : locId();
+    if (!d) return false;
+    d0.id = d.id;
+    return true;
   },
   updDep(d0) { if (sb) dbTry(sb.from('plan_dependencies').update({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs }).eq('id', d0.id)); },
   delDep(id) { if (sb) dbTry(sb.from('plan_dependencies').delete().eq('id', id)); },
@@ -381,7 +389,7 @@ const state = { person:'', track:'', showDeps:true };
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const trackById = id => TRACKS.find(t => t.id === id);
 const personById = id => PEOPLE.find(p => p.id === id);
-const personDisp = p => p.name + (p.role.startsWith('Løn') || p.role.startsWith('ERP') ? ' (' + p.role + ')' : '');
+const personDisp = p => p.name; /* navne er entydige i plan_people */
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 const isDark = () => {
   const t = document.documentElement.getAttribute('data-theme');
@@ -400,7 +408,9 @@ function depTo(d) {
 function depStatus(d) {
   const F = depFrom(d), T = depTo(d);
   if (!F || !T) return 'ok';
-  const a = F.ms.m, b = T.ms ? T.ms.m : T.t.from;
+  /* Forudsætningen (F) skal være leveret, før det afhængige arbejde STARTER —
+     derfor sammenlignes mod målets startmåned, ikke dens deadline. */
+  const a = F.ms.m, b = T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from;
   if (a > b) return 'conflict';
   if (b - a <= 1) return 'tight';
   return 'ok';
@@ -456,7 +466,7 @@ function showTT(html, x, y) {
 function hideTT(){ tt.style.display = 'none'; }
 
 /* ================== GANTT ================== */
-const G = { labelW: 250, rowH: 82, headH: 44 };
+const G = { labelW: 250, headH: 44 };
 function visibleTracks() {
   const key = t => {
     if (t.baseline) return [1, 99, 99];
@@ -517,8 +527,8 @@ function renderGantt() {
     trackTopY[t.id] = y;
     html += `<div style="position:absolute;left:0;top:${y}px;width:${W}px;height:${h}px;border-bottom:1px solid var(--grid);${dim}" data-trackrow="${t.id}">`;
     html += `<div class="g-row-label" style="position:absolute;left:0;top:8px;width:${G.labelW-16}px;">
-               <span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${t.name}
-               <span class="g-owner" style="display:block;margin-left:15px;">${t.owner}</span></div>`;
+               <span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${esc(t.name)}
+               <span class="g-owner" style="display:block;margin-left:15px;">${esc(t.owner)}</span></div>`;
     const x1 = G.labelW + t.from * colW + 2;
     const x2solid = G.labelW + (t.solidTo + 1) * colW - 2;
     const x2 = G.labelW + (t.to + 1) * colW - 2;
@@ -551,9 +561,6 @@ function renderGantt() {
           html += `<div style="position:absolute;right:${W-bx1+10}px;top:${rowY+4}px;font-size:10.5px;color:var(--text-secondary);white-space:nowrap;text-align:right;">${txt}</div>`;
       });
     }
-    if (t.beyond) {
-      html += `<div style="position:absolute;right:8px;top:4px;font-size:10px;color:var(--text-muted);">${t.beyond} →</div>`;
-    }
     html += `</div>`;
   });
 
@@ -563,13 +570,14 @@ function renderGantt() {
     DEPS.forEach(dep => {
       const F = depFrom(dep), T = depTo(dep);
       if (!F || !T) return;
-      const a = F.ms.m, b = T.ms ? T.ms.m : T.t.from;
+      /* pilen går fra forudsætningens deadline-rude til starten af den afhængige opgave */
+      const a = F.ms.m, b = T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from;
       if (!(F.t.id in rowIdx) || !(T.t.id in rowIdx)) return;
       const st = depStatus(dep);
       const color = st === 'conflict' ? cssVar('--status-critical') : cssVar('--text-muted');
       const x1 = G.labelW + (a + 0.5) * colW;
       const y1 = msY[F.ms.id] != null ? msY[F.ms.id] : trackTopY[F.t.id] + 14;
-      const x2 = G.labelW + (b + (T.ms ? 0.5 : 0.08)) * colW;
+      const x2 = G.labelW + (b + (T.ms ? 0.15 : 0.08)) * colW;
       const y2 = T.ms && msY[T.ms.id] != null ? msY[T.ms.id] : trackTopY[T.t.id] + 14;
       const midY = (y1 + y2) / 2;
       paths += `<path d="M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2 + (y2>y1?-8:8)}" fill="none" stroke="${color}" stroke-width="1.6" opacity="0.85" marker-end="url(#arr${st==='conflict'?'C':'N'})"/>`;
@@ -593,7 +601,7 @@ function renderGantt() {
       ? msAl.map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ')
       : (ms.owner || t.owner);
     const html2 = `<div class="tt-title">◆ ${esc(ms.label)}</div>
-      <div class="tt-row"><span>Spor</span><b>${t.name}</b></div>
+      <div class="tt-row"><span>Spor</span><b>${esc(t.name)}</b></div>
       <div class="tt-row"><span>Periode</span><b>${ms.from < ms.m ? MONTHS[ms.from].full + ' – ' + MONTHS[ms.m].full : MONTHS[ms.m].full}</b></div>
       <div class="tt-row"><span>Personer</span><b>${esc(persons)}</b></div>
       ${depsOut.map(d => { const T = depTo(d); return T ? `<div class="tt-row"><span>Forudsætning for</span><b>${T.ms ? esc(T.ms.label) : T.t.name}</b></div>` : ''; }).join('')}
@@ -605,7 +613,7 @@ function renderGantt() {
   });
 
   $('#ganttTable').innerHTML = `<table><thead><tr><th>Spor</th><th>Ejer</th><th>Aktiv fase</th><th>Milepæle</th></tr></thead><tbody>` +
-    tracks.map(t => `<tr><td>${t.name}</td><td>${t.owner}</td><td>${MONTHS[t.from].full} – ${MONTHS[t.solidTo].full}${t.ongoing?' (løbende herefter)':''}</td><td>${t.milestones.map(m=>`${esc(m.label)} (${MONTHS[m.m].full}${m.owner?', '+esc(m.owner):''})`).join(' · ')||'–'}</td></tr>`).join('') + `</tbody></table>`;
+    tracks.map(t => `<tr><td>${esc(t.name)}</td><td>${esc(t.owner)}</td><td>${MONTHS[t.from].full} – ${MONTHS[t.solidTo].full}${t.ongoing?' (løbende herefter)':''}</td><td>${t.milestones.map(m=>`${esc(m.label)} (${MONTHS[m.m].full}${m.owner?', '+esc(m.owner):''})`).join(' · ')||'–'}</td></tr>`).join('') + `</tbody></table>`;
 }
 
 /* ================== HEATMAP ================== */
@@ -632,7 +640,7 @@ function renderHeat() {
     const p = personById(pid); const i = +mi;
     const rows = breakdown(pid, i).map(([tid,v]) => {
       const t = trackById(tid);
-      return `<div class="tt-row"><span><span class="dot" style="background:var(${t.color})"></span>${t.name}</span><b>${v} %</b></div>`;
+      return `<div class="tt-row"><span><span class="dot" style="background:var(${t.color})"></span>${esc(t.name)}</span><b>${v} %</b></div>`;
     }).join('');
     const tot = loadFor(pid, i);
     const html2 = `<div class="tt-title">${p.name} · ${MONTHS[i].full}</div>${rows}
@@ -662,7 +670,7 @@ function renderWarnings() {
       if (v > 100 && !run) run = { from: i, max: v };
       else if (v > 100 && run) run.max = Math.max(run.max, v);
       else if (v <= 100 && run) {
-        const det = breakdown(p.id, run.from).map(([tid,x]) => `${trackById(tid).name.split(' – ')[0].split(' (')[0]} ${x} %`).join(', ');
+        const det = breakdown(p.id, run.from).map(([tid,x]) => `${esc(trackById(tid).name.split(' – ')[0].split(' (')[0])} ${x} %`).join(', ');
         items.push({ level:'crit', html:`<b>${p.name}</b> er overbooket ${MONTHS[run.from].full}${run.from<i-1?' – '+MONTHS[i-1].full:''} (op til ${run.max} %). ${MONTHS[run.from].full}: ${det}.` });
         run = null;
       }
@@ -673,9 +681,9 @@ function renderWarnings() {
     if (st === 'ok') return;
     const F = depFrom(dep), T = depTo(dep);
     if (!F || !T) return;
-    const a = F.ms.m, b = T.ms ? T.ms.m : T.t.from;
-    const toLbl = T.ms ? '"' + esc(T.ms.label) + '"' : 'start af ' + T.t.name;
-    if (st === 'conflict') items.push({ level:'crit', html:`<b>Afhængighedskonflikt:</b> "${esc(F.ms.label)}" (${MONTHS[a].full}) ligger EFTER ${toLbl} (${MONTHS[b].full}). Flyt en af dem.` });
+    const a = F.ms.m, b = T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from;
+    const toLbl = T.ms ? 'starten af "' + esc(T.ms.label) + '"' : 'start af ' + esc(T.t.name);
+    if (st === 'conflict') items.push({ level:'crit', html:`<b>Afhængighedskonflikt:</b> "${esc(F.ms.label)}" leveres først ${MONTHS[a].full}, men ${toLbl} er ${MONTHS[b].full}. Flyt en af dem.` });
     else items.push({ level:'warn', html:`<b>Tæt afhængighed:</b> "${esc(F.ms.label)}" (${MONTHS[a].full}) ligger ≤ 1 md. før ${toLbl} (${MONTHS[b].full}) – ingen buffer hvis den skrider.` });
   });
   $('#warnings').innerHTML = items.length
@@ -719,7 +727,7 @@ function renderMsEditor() {
   });
   html += `</tbody></table>
     <div style="display:flex;gap:8px;align-items:center;margin-top:2px;">
-      <select id="msTrackSel">${TRACKS.filter(t=>!t.baseline).map(t=>`<option value="${t.id}">${t.name}</option>`).join('')}</select>
+      <select id="msTrackSel">${TRACKS.filter(t=>!t.baseline).map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
       <button class="add-btn" id="addMs" style="margin-top:0;">+ Tilføj punkt på dette spor</button>
     </div>`;
   $('#msEditor').innerHTML = html;
@@ -751,7 +759,7 @@ function renderMsEditor() {
     const pctInput = $('#msEditor').querySelector(`[data-map="${msId}:${pid}"]`);
     if (cb.checked) {
       const a = { p: pid, t: found.t.id, msId: msId, from: ms.from, to: ms.m, pct: Number(pctInput.value) || 20 };
-      await DB.addAlloc(a);
+      if (!(await DB.addAlloc(a))) { cb.checked = false; return; }
       ALLOC.push(a);
       pctInput.disabled = false;
     } else {
@@ -784,7 +792,7 @@ function renderMsEditor() {
   $('#addMs').addEventListener('click', async () => {
     const t = trackById($('#msTrackSel').value);
     const ms = { m: 0, from: 0, label: 'Nyt punkt', owner: '' };
-    await DB.addMilestone(t.id, ms);
+    if (!(await DB.addMilestone(t.id, ms))) return;
     t.milestones.push(ms);
     refresh(true);
   });
@@ -816,7 +824,7 @@ function renderTrackEditor() {
 function renderAllocEditor() {
   /* Viser kun løbende/fri rækker (uden punkt) — punkt-allokeringer styres i punkt-editoren.
      Vælg et punkt i dropdown'en for at konvertere en gammel række til en opgave-allokering. */
-  const trackShort = t => t.name.split(' – ')[0].split(' (')[0];
+  const trackShort = t => esc(t.name.split(' – ')[0].split(' (')[0]);
   const taskOpts = a => {
     let o = '';
     const cur = trackById(a.t);
@@ -836,19 +844,22 @@ function renderAllocEditor() {
     const per = allocPeriod(a);
     const perCell = a.msId
       ? `<span style="color:var(--text-secondary);">${MONTHS[per.from].full} – ${MONTHS[per.to].full} <span style="color:var(--text-muted);">(følger punktet)</span></span>`
-      : `<select data-ae="${i}:from">${monthOptions(a.from)}</select> – <select data-ae="${i}:to">${monthOptions(a.to)}</select>`;
+      : `<select data-ae="${a.id}:from">${monthOptions(a.from)}</select> – <select data-ae="${a.id}:to">${monthOptions(a.to)}</select>`;
     html += `<tr>
-      <td><select data-ae="${i}:p">${PEOPLE.map(p=>`<option value="${p.id}" ${p.id===a.p?'selected':''}>${personDisp(p)}</option>`).join('')}</select></td>
-      <td><select data-ae="${i}:task">${taskOpts(a)}</select></td>
+      <td><select data-ae="${a.id}:p">${PEOPLE.map(p=>`<option value="${p.id}" ${p.id===a.p?'selected':''}>${esc(personDisp(p))}</option>`).join('')}</select></td>
+      <td><select data-ae="${a.id}:task">${taskOpts(a)}</select></td>
       <td style="white-space:nowrap;font-size:12.5px;">${perCell}</td>
-      <td><input type="number" min="0" max="150" step="5" value="${a.pct}" data-ae="${i}:pct"></td>
-      <td><button class="mini-btn" data-adel="${i}" title="Slet række">✕</button></td></tr>`;
+      <td><input type="number" min="0" max="150" step="5" value="${a.pct}" data-ae="${a.id}:pct"></td>
+      <td><button class="mini-btn" data-adel="${a.id}" title="Slet række">✕</button></td></tr>`;
   });
   html += `</tbody></table><button class="add-btn" id="addAlloc">+ Tilføj allokering</button>`;
   $('#allocEditor').innerHTML = html;
   $('#allocEditor').querySelectorAll('[data-ae]').forEach(el => el.addEventListener('change', () => {
-    const [i, f] = el.dataset.ae.split(':');
-    const a = ALLOC[+i];
+    /* rækker identificeres ved id, ikke position — en realtime-reload må ikke kunne
+       forskyde indekserne, så et gem rammer en forkert række */
+    const idx = el.dataset.ae.lastIndexOf(':');
+    const id = el.dataset.ae.slice(0, idx), f = el.dataset.ae.slice(idx + 1);
+    const a = ALLOC.find(x => x.id === id); if (!a) return;
     if (f === 'pct') a.pct = Number(el.value) || 0;
     else if (f === 'from' || f === 'to') a[f] = Number(el.value);
     else if (f === 'task') {
@@ -865,28 +876,28 @@ function renderAllocEditor() {
     refresh(f === 'task'); /* opgave-skift ændrer Periode-cellen → genbyg editoren */
   }));
   $('#allocEditor').querySelectorAll('[data-adel]').forEach(el => el.addEventListener('click', () => {
-    const a = ALLOC[+el.dataset.adel];
+    const a = ALLOC.find(x => x.id === el.dataset.adel); if (!a) return;
     DB.delAlloc(a.id);
-    ALLOC.splice(+el.dataset.adel, 1);
+    ALLOC = ALLOC.filter(x => x !== a);
     refresh(true);
   }));
   $('#addAlloc').addEventListener('click', async () => {
     const base = TRACKS.find(t => t.baseline) || TRACKS[0];
     const a = { p: PEOPLE[0] ? PEOPLE[0].id : 'gorm', t: base ? base.id : 'drift', msId: null, from: 0, to: 17, pct: 10 };
-    await DB.addAlloc(a);
+    if (!(await DB.addAlloc(a))) return;
     ALLOC.push(a);
     refresh(true);
   });
 }
 function allMilestoneOpts(selId) {
   return TRACKS.filter(t => t.milestones.length).map(t =>
-    t.milestones.map(ms => `<option value="${ms.id}" ${ms.id===selId?'selected':''}>${t.name.split(' – ')[0].split(' (')[0]}: ${esc(ms.label)}</option>`).join('')
+    t.milestones.map(ms => `<option value="${ms.id}" ${ms.id===selId?'selected':''}>${esc(t.name.split(' – ')[0].split(' (')[0])}: ${esc(ms.label)}</option>`).join('')
   ).join('');
 }
 function depTargetOpts(dep) {
   return TRACKS.filter(t => !t.baseline).map(t => {
-    let o = `<option value="start:${t.id}" ${!dep.toMs && dep.toT===t.id?'selected':''}>${t.name.split(' – ')[0].split(' (')[0]}: (projektstart)</option>`;
-    o += t.milestones.map(ms => `<option value="ms:${ms.id}" ${dep.toMs===ms.id?'selected':''}>${t.name.split(' – ')[0].split(' (')[0]}: ${esc(ms.label)}</option>`).join('');
+    let o = `<option value="start:${t.id}" ${!dep.toMs && dep.toT===t.id?'selected':''}>${esc(t.name.split(' – ')[0].split(' (')[0])}: (projektstart)</option>`;
+    o += t.milestones.map(ms => `<option value="ms:${ms.id}" ${dep.toMs===ms.id?'selected':''}>${esc(t.name.split(' – ')[0].split(' (')[0])}: ${esc(ms.label)}</option>`).join('');
     return o;
   }).join('');
 }
@@ -926,7 +937,7 @@ function renderDepEditor() {
     if (!withMs) { toast('Opret et punkt først.'); return; }
     const target = TRACKS.find(t => !t.baseline && t.id !== withMs.id) || withMs;
     const d = { fromMs: withMs.milestones[0].id, toT: target.id, toMs: null };
-    await DB.addDep(d);
+    if (!(await DB.addDep(d))) return;
     DEPS.push(d);
     refresh(true);
   });
@@ -935,8 +946,8 @@ function renderDepEditor() {
 /* ================== CONTROLS, AUTH & BOOT ================== */
 function fillFilters() {
   const pf = $('#personFilter'), tf = $('#trackFilter');
-  pf.innerHTML = '<option value="">Alle</option>' + PEOPLE.map(p => `<option value="${p.id}">${personDisp(p)}</option>`).join('');
-  tf.innerHTML = '<option value="">Alle</option>' + TRACKS.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+  pf.innerHTML = '<option value="">Alle</option>' + PEOPLE.map(p => `<option value="${p.id}">${esc(personDisp(p))}</option>`).join('');
+  tf.innerHTML = '<option value="">Alle</option>' + TRACKS.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
   pf.value = state.person; tf.value = state.track;
 }
 function initControls() {
@@ -995,16 +1006,13 @@ function showLogin() {
 }
 async function init() {
   initControls();
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !window.supabase) {
+    $('#demoBanner').textContent = window.supabase
+      ? 'Supabase er ikke konfigureret – siden kan ikke vise data.'
+      : 'Kunne ikke indlæse Supabase-biblioteket (CDN blokeret?) – siden kan ikke vise data.';
     $('#demoBanner').style.display = 'block';
-    seedDemo();
     startUI();
     return;
-  }
-  if (!window.supabase) {
-    $('#demoBanner').textContent = 'Kunne ikke indlæse Supabase-biblioteket (CDN blokeret?). Viser demo-data uden gem.';
-    $('#demoBanner').style.display = 'block';
-    seedDemo(); startUI(); return;
   }
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   sb.auth.onAuthStateChange((ev, session) => {
