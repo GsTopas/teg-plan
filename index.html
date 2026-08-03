@@ -295,7 +295,13 @@ MONTHS.forEach((mo, i) => {
   if (!last || last.q !== mo.q) QUARTERS.push({ q: mo.q, start: i, len: 1 });
   else last.len++;
 });
-const TODAY_X = 0 + 13/31;
+/* "i dag"-linjens position: beregnes af dags dato (måned 0 = juli 2026), klemt til horisonten */
+const TODAY_X = (() => {
+  const now = new Date();
+  const idx = (now.getFullYear() - 2026) * 12 + now.getMonth() - 6;
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  return Math.min(18, Math.max(0, idx + (now.getDate() - 1) / daysInMonth));
+})();
 
 /* ================== DATA (fyldes fra Supabase eller demo-seed) ================== */
 let PEOPLE = [], TRACKS = [], ALLOC = [], DEPS = [];
