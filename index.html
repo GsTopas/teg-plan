@@ -211,7 +211,7 @@
     <div class="card-head">
       <div>
         <h2>Tidslinje &amp; milepæle</h2>
-        <p class="desc">Øverste linje pr. spor = sporets samlede periode · bjælker = opgaver med ◆ ved deadline · pile = afhængigheder (rød = konflikt) · lodret linje = i dag.</p>
+        <p class="desc">Øverste linje pr. spor = sporets samlede periode · bjælker = opgaver med ◆ ved deadline · pile = afhængigheder (rød = konflikt, stiplet = "færdig før afslutning") · lodret linje = i dag.</p>
       </div>
     </div>
     <div id="gantt-outer"><div id="gantt"></div></div>
@@ -339,7 +339,7 @@ async function loadAll() {
   TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:r.color, from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, milestones:[] }));
   ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner }); });
   ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct, msId:r.milestone_id || null }));
-  DEPS = de.data.map(r => ({ id:r.id, fromMs:r.from_ms, toT:r.to_track, toMs:r.to_ms }));
+  DEPS = de.data.map(r => ({ id:r.id, fromMs:r.from_ms, toT:r.to_track, toMs:r.to_ms, type:r.dep_type || 'start' }));
 }
 const DB = {
   async addMilestone(tid, ms) {
@@ -364,12 +364,12 @@ const DB = {
   delAlloc(id) { if (sb) dbTry(sb.from('plan_allocations').delete().eq('id', id)); },
   async addDep(d0) {
     if (!sb) { d0.id = locId(); return true; }
-    const d = await dbTry(sb.from('plan_dependencies').insert({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs }).select().single());
+    const d = await dbTry(sb.from('plan_dependencies').insert({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs, dep_type:d0.type || 'start' }).select().single());
     if (!d) return false;
     d0.id = d.id;
     return true;
   },
-  updDep(d0) { if (sb) dbTry(sb.from('plan_dependencies').update({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs }).eq('id', d0.id)); },
+  updDep(d0) { if (sb) dbTry(sb.from('plan_dependencies').update({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs, dep_type:d0.type || 'start' }).eq('id', d0.id)); },
   delDep(id) { if (sb) dbTry(sb.from('plan_dependencies').delete().eq('id', id)); },
 };
 function subscribeRealtime() {
@@ -408,9 +408,12 @@ function depTo(d) {
 function depStatus(d) {
   const F = depFrom(d), T = depTo(d);
   if (!F || !T) return 'ok';
-  /* Forudsætningen (F) skal være leveret, før det afhængige arbejde STARTER —
-     derfor sammenlignes mod målets startmåned, ikke dens deadline. */
-  const a = F.ms.m, b = T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from;
+  /* 'start':  forudsætningen skal være leveret, før det afhængige arbejde STARTER.
+     'finish': de kan køre sideløbende, men målet kan først AFSLUTTES, når forudsætningen er leveret. */
+  const a = F.ms.m;
+  const b = d.type === 'finish'
+    ? (T.ms ? T.ms.m : T.t.solidTo)
+    : (T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from);
   if (a > b) return 'conflict';
   if (b - a <= 1) return 'tight';
   return 'ok';
@@ -570,17 +573,21 @@ function renderGantt() {
     DEPS.forEach(dep => {
       const F = depFrom(dep), T = depTo(dep);
       if (!F || !T) return;
-      /* pilen går fra forudsætningens deadline-rude til starten af den afhængige opgave */
-      const a = F.ms.m, b = T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from;
+      /* 'start'-pile går til starten af den afhængige opgave; 'finish'-pile (stiplede)
+         går til dens deadline-rude */
+      const isFF = dep.type === 'finish';
+      const a = F.ms.m;
+      const b = isFF ? (T.ms ? T.ms.m : T.t.solidTo)
+                     : (T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from);
       if (!(F.t.id in rowIdx) || !(T.t.id in rowIdx)) return;
       const st = depStatus(dep);
       const color = st === 'conflict' ? cssVar('--status-critical') : cssVar('--text-muted');
       const x1 = G.labelW + (a + 0.5) * colW;
       const y1 = msY[F.ms.id] != null ? msY[F.ms.id] : trackTopY[F.t.id] + 14;
-      const x2 = G.labelW + (b + (T.ms ? 0.15 : 0.08)) * colW;
+      const x2 = G.labelW + (b + (T.ms ? (isFF ? 0.5 : 0.15) : 0.08)) * colW;
       const y2 = T.ms && msY[T.ms.id] != null ? msY[T.ms.id] : trackTopY[T.t.id] + 14;
       const midY = (y1 + y2) / 2;
-      paths += `<path d="M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2 + (y2>y1?-8:8)}" fill="none" stroke="${color}" stroke-width="1.6" opacity="0.85" marker-end="url(#arr${st==='conflict'?'C':'N'})"/>`;
+      paths += `<path d="M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2 + (y2>y1?-8:8)}" fill="none" stroke="${color}" stroke-width="1.6" opacity="0.85"${isFF ? ' stroke-dasharray="5 4"' : ''} marker-end="url(#arr${st==='conflict'?'C':'N'})"/>`;
     });
     html += `<svg class="g-svg" width="${W}" height="${H}">
       <defs>
@@ -604,8 +611,8 @@ function renderGantt() {
       <div class="tt-row"><span>Spor</span><b>${esc(t.name)}</b></div>
       <div class="tt-row"><span>Periode</span><b>${ms.from < ms.m ? MONTHS[ms.from].full + ' – ' + MONTHS[ms.m].full : MONTHS[ms.m].full}</b></div>
       <div class="tt-row"><span>Personer</span><b>${esc(persons)}</b></div>
-      ${depsOut.map(d => { const T = depTo(d); return T ? `<div class="tt-row"><span>Forudsætning for</span><b>${T.ms ? esc(T.ms.label) : T.t.name}</b></div>` : ''; }).join('')}
-      ${depsIn.map(d => { const F = depFrom(d); return F ? `<div class="tt-row"><span>Afhænger af</span><b>${esc(F.ms.label)}</b></div>` : ''; }).join('')}`;
+      ${depsOut.map(d => { const T = depTo(d); return T ? `<div class="tt-row"><span>Forudsætning for${d.type==='finish'?' (afslutning)':''}</span><b>${T.ms ? esc(T.ms.label) : esc(T.t.name)}</b></div>` : ''; }).join('')}
+      ${depsIn.map(d => { const F = depFrom(d); return F ? `<div class="tt-row"><span>Afhænger af${d.type==='finish'?' (før afslutning)':''}</span><b>${esc(F.ms.label)}</b></div>` : ''; }).join('')}`;
     el.addEventListener('mousemove', e => showTT(html2, e.clientX, e.clientY));
     el.addEventListener('mouseleave', hideTT);
     el.addEventListener('focus', () => { const r = el.getBoundingClientRect(); showTT(html2, r.left, r.bottom); });
@@ -681,8 +688,13 @@ function renderWarnings() {
     if (st === 'ok') return;
     const F = depFrom(dep), T = depTo(dep);
     if (!F || !T) return;
-    const a = F.ms.m, b = T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from;
-    const toLbl = T.ms ? 'starten af "' + esc(T.ms.label) + '"' : 'start af ' + esc(T.t.name);
+    const isFF = dep.type === 'finish';
+    const a = F.ms.m;
+    const b = isFF ? (T.ms ? T.ms.m : T.t.solidTo)
+                   : (T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from);
+    const toLbl = isFF
+      ? (T.ms ? 'afslutningen af "' + esc(T.ms.label) + '"' : 'afslutningen af ' + esc(T.t.name))
+      : (T.ms ? 'starten af "' + esc(T.ms.label) + '"' : 'start af ' + esc(T.t.name));
     if (st === 'conflict') items.push({ level:'crit', html:`<b>Afhængighedskonflikt:</b> "${esc(F.ms.label)}" leveres først ${MONTHS[a].full}, men ${toLbl} er ${MONTHS[b].full}. Flyt en af dem.` });
     else items.push({ level:'warn', html:`<b>Tæt afhængighed:</b> "${esc(F.ms.label)}" (${MONTHS[a].full}) ligger ≤ 1 md. før ${toLbl} (${MONTHS[b].full}) – ingen buffer hvis den skrider.` });
   });
@@ -902,12 +914,16 @@ function depTargetOpts(dep) {
   }).join('');
 }
 function renderDepEditor() {
-  let html = `<table class="edit"><thead><tr><th>Forudsætning (milepæl)</th><th>→ Afhængigt projekt / milepæl</th><th>Status</th><th></th></tr></thead><tbody>`;
+  let html = `<table class="edit"><thead><tr><th>Forudsætning (milepæl)</th><th>Regel</th><th>→ Afhængigt projekt / milepæl</th><th>Status</th><th></th></tr></thead><tbody>`;
   DEPS.forEach(d => {
     const st = depStatus(d);
     const stTxt = st==='conflict' ? '<span style="color:var(--status-critical);font-weight:600;">▲ konflikt</span>' : st==='tight' ? '<span style="color:var(--text-secondary);">◆ tæt</span>' : '<span style="color:var(--good-text);">✓ ok</span>';
     html += `<tr>
       <td><select data-de="${d.id}:from">${allMilestoneOpts(d.fromMs)}</select></td>
+      <td><select data-de="${d.id}:type">
+        <option value="start" ${d.type!=='finish'?'selected':''}>skal være færdig før START af</option>
+        <option value="finish" ${d.type==='finish'?'selected':''}>skal være færdig før AFSLUTNING af</option>
+      </select></td>
       <td><select data-de="${d.id}:to">${depTargetOpts(d)}</select></td>
       <td>${stTxt}</td>
       <td><button class="mini-btn" data-ddel="${d.id}" title="Slet">✕</button></td></tr>`;
@@ -921,6 +937,7 @@ function renderDepEditor() {
     const id = el.dataset.de.slice(0, idx), side = el.dataset.de.slice(idx+1);
     const d = DEPS.find(x => x.id === id); if (!d) return;
     if (side === 'from') d.fromMs = el.value;
+    else if (side === 'type') d.type = el.value;
     else if (el.value.startsWith('start:')) { d.toT = el.value.slice(6); d.toMs = null; }
     else { const msId = el.value.slice(3); const f = findMs(msId); if (f) { d.toT = f.t.id; d.toMs = msId; } }
     DB.updDep(d);
@@ -936,7 +953,7 @@ function renderDepEditor() {
     const withMs = TRACKS.find(t => t.milestones.length);
     if (!withMs) { toast('Opret et punkt først.'); return; }
     const target = TRACKS.find(t => !t.baseline && t.id !== withMs.id) || withMs;
-    const d = { fromMs: withMs.milestones[0].id, toT: target.id, toMs: null };
+    const d = { fromMs: withMs.milestones[0].id, toT: target.id, toMs: null, type: 'start' };
     if (!(await DB.addDep(d))) return;
     DEPS.push(d);
     refresh(true);
