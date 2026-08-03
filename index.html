@@ -211,7 +211,7 @@
     <div class="card-head">
       <div>
         <h2>Tidslinje &amp; milepæle</h2>
-        <p class="desc">Fuldt farvede bjælker = aktiv leverancefase · nedtonede/tynde = løbende drift &amp; videreudvikling · ◆ = milepæl · pile = afhængigheder (rød = konflikt) · lodret linje = i dag.</p>
+        <p class="desc">Øverste linje pr. spor = sporets samlede periode · bjælker = opgaver med ◆ ved deadline · pile = afhængigheder (rød = konflikt) · lodret linje = i dag.</p>
       </div>
     </div>
     <div id="gantt-outer"><div id="gantt"></div></div>
@@ -481,7 +481,12 @@ function renderGantt() {
   const W = Math.max(outerW, 980);
   const plotW = W - G.labelW;
   const colW = plotW / 18;
-  const H = G.headH + tracks.length * G.rowH + 16;
+  /* Dynamisk rækkehøjde: hvert spor har en slank samle-linje + én sub-række pr. opgave */
+  const SUBH = 21, GHEAD = 27, GPAD = 9;
+  const geo = tracks.map(t => ({ t, h: t.baseline ? 40 : GHEAD + t.milestones.length * SUBH + GPAD }));
+  { let acc = G.headH; geo.forEach(g => { g.y = acc; acc += g.h; }); }
+  const H = (geo.length ? geo[geo.length-1].y + geo[geo.length-1].h : G.headH) + 16;
+  const msY = {}, trackTopY = {};
   cont.style.width = W + 'px';
   cont.style.height = H + 'px';
 
@@ -500,54 +505,49 @@ function renderGantt() {
   html += `<div style="position:absolute;left:${tx}px;top:${G.headH-8}px;height:${H - (G.headH-8) - 15}px;width:2px;background:var(--text-muted);opacity:.6;"></div>
            <div style="position:absolute;left:${tx-13}px;top:${H-13}px;font-size:10px;color:var(--text-muted);">i dag</div>`;
 
-  tracks.forEach((t, r) => {
-    const y = G.headH + r * G.rowH;
+  geo.forEach(({ t, y, h }) => {
     const dim = trackDimmed(t) ? 'opacity:.28;' : '';
     const col = `var(${t.color})`;
-    html += `<div style="position:absolute;left:0;top:${y}px;width:${W}px;height:${G.rowH}px;border-bottom:1px solid var(--grid);${dim}" data-trackrow="${t.id}">`;
-    html += `<div class="g-row-label" style="position:absolute;left:0;top:9px;width:${G.labelW-16}px;">
+    trackTopY[t.id] = y;
+    html += `<div style="position:absolute;left:0;top:${y}px;width:${W}px;height:${h}px;border-bottom:1px solid var(--grid);${dim}" data-trackrow="${t.id}">`;
+    html += `<div class="g-row-label" style="position:absolute;left:0;top:8px;width:${G.labelW-16}px;">
                <span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${t.name}
                <span class="g-owner" style="display:block;margin-left:15px;">${t.owner}</span></div>`;
-    const barY = 16;
     const x1 = G.labelW + t.from * colW + 2;
     const x2solid = G.labelW + (t.solidTo + 1) * colW - 2;
     const x2 = G.labelW + (t.to + 1) * colW - 2;
     if (t.baseline) {
-      html += `<div style="position:absolute;left:${x1}px;top:${barY+2}px;width:${x2solid-x1}px;height:6px;border-radius:3px;background:${col};opacity:.45;"></div>`;
-      html += `<div style="position:absolute;left:${x1+6}px;top:${barY+12}px;font-size:10px;color:var(--text-muted);">løbende basisdrift – vises for at synliggøre ressourcetrækket</div>`;
+      html += `<div style="position:absolute;left:${x1}px;top:14px;width:${x2solid-x1}px;height:6px;border-radius:3px;background:${col};opacity:.45;"></div>`;
+      html += `<div style="position:absolute;left:${x1+6}px;top:24px;font-size:10px;color:var(--text-muted);">løbende basisdrift – vises for at synliggøre ressourcetrækket</div>`;
     } else {
-      html += `<div style="position:absolute;left:${x1}px;top:${barY}px;width:${x2solid-x1}px;height:10px;border-radius:4px;background:${col};"></div>`;
-    }
-    if (t.to > t.solidTo && !t.baseline) {
-      html += `<div style="position:absolute;left:${x2solid+2}px;top:${barY+2}px;width:${x2-x2solid-2}px;height:6px;border-radius:3px;background:${col};opacity:.30;"></div>`;
+      /* slank samle-linje = sporets samlede periode */
+      html += `<div style="position:absolute;left:${x1}px;top:12px;width:${x2solid-x1}px;height:5px;border-radius:3px;background:${col};"></div>`;
+      if (t.to > t.solidTo) {
+        html += `<div style="position:absolute;left:${x2solid+2}px;top:13px;width:${x2-x2solid-2}px;height:3px;border-radius:2px;background:${col};opacity:.30;"></div>`;
+      }
+      /* én sub-række pr. opgave: bjælke fra start til deadline, rude ved deadline, label ud for bjælken */
+      const msSorted = t.milestones.slice().sort((a,b) => (a.from - b.from) || (a.m - b.m));
+      msSorted.forEach((ms, k) => {
+        const rowY = GHEAD + k * SUBH;
+        const bx1 = G.labelW + ms.from * colW + 2;
+        const bx2 = G.labelW + (ms.m + 1) * colW - 2;
+        const mx = G.labelW + (ms.m + 0.5) * colW;
+        msY[ms.id] = y + rowY + 10;
+        html += `<div style="position:absolute;left:${bx1}px;top:${rowY+4}px;width:${bx2-bx1}px;height:12px;border-radius:6px;background:${col};opacity:.30;"></div>`;
+        html += `<div data-ms="${ms.id}" tabindex="0" style="position:absolute;left:${mx-5}px;top:${rowY+4.5}px;width:11px;height:11px;background:${col};transform:rotate(45deg);border:2px solid var(--surface-1);border-radius:2px;cursor:default;"></div>`;
+        const msAl = ALLOC.filter(a => a.msId === ms.id);
+        const who = msAl.length ? msAl.map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ') : (ms.owner || '');
+        const txt = `${esc(ms.label)}${who ? `<span style="color:var(--text-muted);"> · ${esc(who)}</span>` : ''}`;
+        const estW = (ms.label.length + (who ? who.length + 3 : 0)) * 5.9;
+        if (bx2 + 10 + estW < W - 6)
+          html += `<div style="position:absolute;left:${bx2+10}px;top:${rowY+4}px;font-size:10.5px;color:var(--text-secondary);white-space:nowrap;">${txt}</div>`;
+        else
+          html += `<div style="position:absolute;right:${W-bx1+10}px;top:${rowY+4}px;font-size:10.5px;color:var(--text-secondary);white-space:nowrap;text-align:right;">${txt}</div>`;
+      });
     }
     if (t.beyond) {
-      html += `<div style="position:absolute;right:8px;top:${barY-13}px;font-size:10px;color:var(--text-muted);">${t.beyond} →</div>`;
+      html += `<div style="position:absolute;right:8px;top:4px;font-size:10px;color:var(--text-muted);">${t.beyond} →</div>`;
     }
-    const lineEnd = [-1e9, -1e9, -1e9];
-    const msSorted = t.milestones.slice().sort((a,b) => a.m - b.m);
-    msSorted.forEach(ms => {
-      const mx = G.labelW + (ms.m + 0.5) * colW;
-      /* periode-streg: opgavens udstrækning fra start-måned frem til deadline-ruden */
-      if (ms.from < ms.m) {
-        const px1 = G.labelW + ms.from * colW + 2;
-        html += `<div style="position:absolute;left:${px1}px;top:${barY+12}px;width:${mx-px1}px;height:3px;border-radius:2px;background:${col};opacity:.55;"></div>`;
-      }
-      html += `<div data-ms="${ms.id}" tabindex="0" style="position:absolute;left:${mx-5}px;top:${barY-0.5}px;width:11px;height:11px;background:${col};transform:rotate(45deg);border:2px solid var(--surface-1);border-radius:2px;cursor:default;"></div>`;
-      const ownerSuffix = ms.owner ? ' · ' + ms.owner : '';
-      const text = ms.label + ' · ' + MONTHS[ms.m].full + ownerSuffix;
-      const estW = text.length * 5.6;
-      const rightAlign = ms.m > 14;
-      let lblStart = rightAlign ? mx + 40 - estW : Math.max(G.labelW, mx - 46);
-      /* kollision: stabl lodret på op til 3 linjer under ruden — forskyd kun vandret som sidste udvej,
-         ellers ender labelen under en anden rude end sin egen */
-      let line = lineEnd.findIndex(e => lblStart >= e + 8);
-      if (line === -1) { line = lineEnd.indexOf(Math.min(...lineEnd)); lblStart = lineEnd[line] + 8; }
-      const yLbl = barY + 19 + line * 13;
-      const align = rightAlign ? `right:${W - mx - 40}px;text-align:right;` : `left:${lblStart}px;`;
-      html += `<div style="position:absolute;${align}top:${yLbl}px;font-size:10px;line-height:1.25;color:var(--text-secondary);white-space:nowrap;">${esc(ms.label)}<span style="color:var(--text-muted);"> · ${MONTHS[ms.m].full}${ownerSuffix}</span></div>`;
-      lineEnd[line] = lblStart + estW;
-    });
     html += `</div>`;
   });
 
@@ -562,9 +562,9 @@ function renderGantt() {
       const st = depStatus(dep);
       const color = st === 'conflict' ? cssVar('--status-critical') : cssVar('--text-muted');
       const x1 = G.labelW + (a + 0.5) * colW;
-      const y1 = G.headH + rowIdx[F.t.id] * G.rowH + 21;
+      const y1 = msY[F.ms.id] != null ? msY[F.ms.id] : trackTopY[F.t.id] + 14;
       const x2 = G.labelW + (b + (T.ms ? 0.5 : 0.08)) * colW;
-      const y2 = G.headH + rowIdx[T.t.id] * G.rowH + 21;
+      const y2 = T.ms && msY[T.ms.id] != null ? msY[T.ms.id] : trackTopY[T.t.id] + 14;
       const midY = (y1 + y2) / 2;
       paths += `<path d="M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2 + (y2>y1?-8:8)}" fill="none" stroke="${color}" stroke-width="1.6" opacity="0.85" marker-end="url(#arr${st==='conflict'?'C':'N'})"/>`;
     });
