@@ -255,6 +255,10 @@
       <summary><b>Afhængigheder</b> (milepæl → projekt/milepæl)</summary>
       <div id="depEditor"></div>
     </details>
+    <details class="editor">
+      <summary><b>Seneste ændringer</b> (automatisk log — hvem, hvornår, hvad)</summary>
+      <div id="changelogView"></div>
+    </details>
     <div class="note">Alle procenter er foreløbige skøn indsat som udgangspunkt (baseret på 3-års planen) – tilpas dem til virkeligheden. “Frontend dev (ny)” er en endnu ikke besat rolle.</div>
   </section>
 
@@ -304,7 +308,7 @@ const TODAY_X = (() => {
 })();
 
 /* ================== DATA (fyldes fra Supabase eller demo-seed) ================== */
-let PEOPLE = [], TRACKS = [], ALLOC = [], DEPS = [];
+let PEOPLE = [], TRACKS = [], ALLOC = [], DEPS = [], CHANGELOG = [];
 let sb = null, localSeq = 0, booted = false;
 const locId = () => 'loc-' + (++localSeq);
 
@@ -340,6 +344,9 @@ async function loadAll() {
   ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner }); });
   ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct, msId:r.milestone_id || null }));
   DEPS = de.data.map(r => ({ id:r.id, fromMs:r.from_ms, toT:r.to_track, toMs:r.to_ms, type:r.dep_type || 'start' }));
+  /* ændringsloggen er ikke kritisk — fejler den, vises resten alligevel */
+  const ch = await sb.from('plan_changelog').select('*').order('changed_at', { ascending: false }).limit(30);
+  CHANGELOG = ch.error ? [] : ch.data;
 }
 const DB = {
   async addMilestone(tid, ms) {
@@ -378,7 +385,7 @@ function subscribeRealtime() {
   /* Genbyg ikke editorerne mens en ejer-popup er åben — det ville lukke den midt i valget */
   const reload = () => { clearTimeout(t); t = setTimeout(async () => { await loadAll(); refresh(!document.querySelector('details.owner-pick[open]')); }, 350); };
   const ch = sb.channel('plan-sync');
-  ['plan_people','plan_tracks','plan_milestones','plan_allocations','plan_dependencies']
+  ['plan_people','plan_tracks','plan_milestones','plan_allocations','plan_dependencies','plan_changelog']
     .forEach(tb => ch.on('postgres_changes', { event:'*', schema:'public', table:tb }, reload));
   ch.subscribe();
 }
@@ -960,6 +967,41 @@ function renderDepEditor() {
   });
 }
 
+/* ================== ÆNDRINGSLOG ================== */
+function renderChangelog() {
+  const el = $('#changelogView'); if (!el) return;
+  if (!CHANGELOG.length) {
+    el.innerHTML = '<div style="font-size:12.5px;color:var(--text-muted);padding:6px 2px;">Ingen ændringer logget endnu.</div>';
+    return;
+  }
+  const tblNavn = { plan_milestones:'punktet', plan_allocations:'allokeringen', plan_tracks:'sporet', plan_dependencies:'en afhængighed', plan_people:'personen' };
+  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt' };
+  const mdr = i => (typeof i === 'number' && MONTHS[i]) ? MONTHS[i].full : i;
+  const vis = (k, v) => v == null ? '–' : (['m','from_m','to_m','solid_to'].includes(k) ? mdr(v) : String(v));
+  el.innerHTML = CHANGELOG.map(c => {
+    const d = new Date(c.changed_at);
+    const when = d.toLocaleDateString('da-DK', { day:'numeric', month:'short' }) + ' ' +
+                 d.toLocaleTimeString('da-DK', { hour:'2-digit', minute:'2-digit' });
+    const verb = c.action === 'INSERT' ? 'oprettede' : c.action === 'DELETE' ? 'slettede' : 'ændrede';
+    let nm = (c.new_data && (c.new_data.label || c.new_data.name)) || (c.old_data && (c.old_data.label || c.old_data.name)) || '';
+    if (c.table_name === 'plan_allocations') {
+      const dta = c.new_data || c.old_data || {};
+      const p = personById(dta.person_id);
+      const f = dta.milestone_id ? findMs(dta.milestone_id) : null;
+      nm = `${p ? p.name : dta.person_id} ${dta.pct}%${f ? ' på ' + f.ms.label : (dta.track_id ? ' på ' + dta.track_id : '')}`;
+    }
+    let detail = '';
+    if (c.action === 'UPDATE' && c.old_data && c.new_data) {
+      detail = Object.keys(c.new_data)
+        .filter(k => k !== 'id' && JSON.stringify(c.new_data[k]) !== JSON.stringify(c.old_data[k]))
+        .map(k => `${feltNavn[k] || k}: ${vis(k, c.old_data[k])} → ${vis(k, c.new_data[k])}`)
+        .join(', ');
+    }
+    return `<div style="font-size:12px;padding:4px 2px;border-bottom:1px solid var(--grid);color:var(--text-secondary);">
+      <span style="color:var(--text-muted);">${when}</span> · <b>${esc(c.changed_by || 'system')}</b> ${verb} ${tblNavn[c.table_name] || c.table_name}${nm ? ` “${esc(nm)}”` : ''}${detail ? `<span style="color:var(--text-muted);"> · ${esc(detail)}</span>` : ''}</div>`;
+  }).join('') + `<div style="font-size:11px;color:var(--text-muted);padding:6px 2px;">Viser de seneste ${CHANGELOG.length} ændringer — hele historikken ligger i databasen (plan_changelog).</div>`;
+}
+
 /* ================== CONTROLS, AUTH & BOOT ================== */
 function fillFilters() {
   const pf = $('#personFilter'), tf = $('#trackFilter');
@@ -992,6 +1034,7 @@ function refresh(rebuildEditors) {
   renderWarnings();
   if (rebuildEditors) { renderTrackEditor(); renderMsEditor(); renderAllocEditor(); }
   renderDepEditor(); /* status-kolonnen kan ændre sig ved alle redigeringer */
+  renderChangelog();
 }
 function startUI() {
   fillFilters();
