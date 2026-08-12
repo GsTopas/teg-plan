@@ -165,6 +165,12 @@
   details.owner-pick .panel label { display: flex; gap: 7px; align-items: center; font-size: 12.5px; padding: 3px 0; cursor: pointer; white-space: nowrap; }
   details.owner-pick .panel label span { flex: 1; }
   details.owner-pick .panel input[type=number] { width: 56px; margin-left: 10px; }
+  details.ms-group { margin: 5px 0; border: 1px solid var(--grid); border-radius: 8px; background: var(--surface-1); }
+  details.ms-group > summary { list-style: none; cursor: pointer; padding: 8px 11px; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  details.ms-group > summary::-webkit-details-marker { display: none; }
+  details.ms-group > summary::before { content: '▸'; color: var(--text-muted); font-size: 11px; }
+  details.ms-group[open] > summary::before { content: '▾'; }
+  details.ms-group .grp-body { padding: 0 11px 9px; }
   .mini-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 5px; }
   .mini-btn:hover { color: var(--status-critical); background: color-mix(in srgb, var(--status-critical) 10%, transparent); }
   .add-btn { background: none; border: 1px dashed var(--axis); border-radius: 7px; color: var(--text-secondary); padding: 5px 12px; cursor: pointer; font-size: 12.5px; margin-top: 2px; }
@@ -393,6 +399,7 @@ function subscribeRealtime() {
 /* ================== HJÆLPERE ================== */
 const $ = s => document.querySelector(s);
 const state = { person:'', track:'', showDeps:true };
+const openMsGroups = new Set(); /* hvilke spor-grupper i punkt-editoren der står åbne */
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const trackById = id => TRACKS.find(t => t.id === id);
 const personById = id => PEOPLE.find(p => p.id === id);
@@ -732,24 +739,29 @@ function renderMsEditor() {
     }).join('');
     return `<details class="owner-pick"><summary>${allocSummary(ms)}</summary><div class="panel">${rows}</div></details>`;
   };
-  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Punkt / opgave</th><th>Fra</th><th>Deadline</th><th>Personer & %</th><th></th></tr></thead><tbody>`;
-  TRACKS.filter(t => !t.baseline).forEach(t => {
-    t.milestones.forEach(ms => {
-      html += `<tr>
-        <td style="white-space:nowrap;"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(${t.color});margin-right:5px;"></span>${t.name.split(' (')[0].split(' – ')[0]}</td>
-        <td><input type="text" value="${esc(ms.label)}" data-me="${ms.id}:label" style="width:200px"></td>
+  /* Grupperet pr. spor: fold et spor ud for at se/redigere dets opgaver.
+     Åben/lukket-tilstand huskes hen over genopbygninger (openMsGroups). */
+  let html = '';
+  visibleTracks().filter(t => !t.baseline).forEach(t => {
+    const msSorted = t.milestones.slice().sort((x, y) => (x.from - y.from) || (x.m - y.m));
+    const rows = msSorted.map(ms => `<tr>
+        <td><input type="text" value="${esc(ms.label)}" data-me="${ms.id}:label" style="width:220px"></td>
         <td><select data-me="${ms.id}:from">${monthOptions(ms.from)}</select></td>
         <td><select data-me="${ms.id}:m">${monthOptions(ms.m)}</select></td>
         <td>${allocPick(ms)}</td>
-        <td><button class="mini-btn" data-mdel="${ms.id}" title="Slet punkt">✕</button></td></tr>`;
-    });
+        <td><button class="mini-btn" data-mdel="${ms.id}" title="Slet punkt">✕</button></td></tr>`).join('');
+    html += `<details class="ms-group"${openMsGroups.has(t.id) ? ' open' : ''} data-msgroup="${t.id}">
+      <summary><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(${t.color});"></span><b>${esc(t.name)}</b><span style="color:var(--text-muted);font-weight:400;font-size:12px;">${t.milestones.length} opgave${t.milestones.length === 1 ? '' : 'r'}</span></summary>
+      <div class="grp-body">
+        <table class="edit"><thead><tr><th>Punkt / opgave</th><th>Fra</th><th>Deadline</th><th>Personer & %</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+        <button class="add-btn" data-addms="${t.id}" style="margin-top:0;">+ Tilføj punkt</button>
+      </div>
+    </details>`;
   });
-  html += `</tbody></table>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:2px;">
-      <select id="msTrackSel">${TRACKS.filter(t=>!t.baseline).map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
-      <button class="add-btn" id="addMs" style="margin-top:0;">+ Tilføj punkt på dette spor</button>
-    </div>`;
   $('#msEditor').innerHTML = html;
+  $('#msEditor').querySelectorAll('details.ms-group').forEach(d => d.addEventListener('toggle', () => {
+    if (d.open) openMsGroups.add(d.dataset.msgroup); else openMsGroups.delete(d.dataset.msgroup);
+  }));
   $('#msEditor').querySelectorAll('[data-me]').forEach(el => el.addEventListener('change', () => {
     const idx = el.dataset.me.lastIndexOf(':');
     const id = el.dataset.me.slice(0, idx), f = el.dataset.me.slice(idx+1);
@@ -808,13 +820,13 @@ function renderMsEditor() {
     DB.delMilestone(id);  /* DB kaskade-sletter selv afhængigheder og allokeringer */
     refresh(true);
   }));
-  $('#addMs').addEventListener('click', async () => {
-    const t = trackById($('#msTrackSel').value);
-    const ms = { m: 0, from: 0, label: 'Nyt punkt', owner: '' };
+  $('#msEditor').querySelectorAll('[data-addms]').forEach(btn => btn.addEventListener('click', async () => {
+    const t = trackById(btn.dataset.addms); if (!t) return;
+    const ms = { m: t.from, from: t.from, label: 'Nyt punkt', owner: '' };
     if (!(await DB.addMilestone(t.id, ms))) return;
     t.milestones.push(ms);
     refresh(true);
-  });
+  }));
 }
 function renderTrackEditor() {
   let html = `<table class="edit"><thead><tr><th>Spor</th><th>Fra</th><th>Til</th><th>Ejer</th></tr></thead><tbody>`;
