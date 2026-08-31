@@ -183,6 +183,10 @@
   details.tblview th { color: var(--text-muted); font-weight: 500; font-size: 11.5px; }
   details.tblview td.num { font-variant-numeric: tabular-nums; text-align: right; }
   .note { font-size: 12px; color: var(--text-muted); margin-top: 14px; border-top: 1px solid var(--grid); padding-top: 10px; }
+  .viewtabs { display: flex; gap: 6px; margin: 0 0 12px; }
+  .viewtabs .vt { background: var(--surface-1); border: 1px solid var(--border); border-radius: 9px; padding: 7px 18px; font-size: 13.5px; cursor: pointer; color: var(--text-secondary); }
+  .viewtabs .vt.active { color: var(--text-primary); border-color: var(--axis); font-weight: 650; }
+  .viewtabs .vt:hover { border-color: var(--axis); }
   footer { font-size: 11.5px; color: var(--text-muted); margin-top: 8px; }
 </style>
 </head>
@@ -203,7 +207,12 @@
   <div id="demoBanner" style="display:none;margin:0 0 12px;padding:8px 14px;border:1px solid var(--status-warning);border-radius:10px;font-size:12.5px;color:var(--text-secondary);">Demo-tilstand: SUPABASE_URL / SUPABASE_ANON_KEY er ikke udfyldt øverst i filens script – data vises lokalt og gemmes <b>ikke</b>.</div>
 
 
-  <div class="filters">
+  <div class="viewtabs">
+    <button class="vt active" data-view="overblik">Overblik</button>
+    <button class="vt" data-view="detalje">Spor-detalje</button>
+  </div>
+
+  <div class="filters view-ov">
     <label>Person
       <select id="personFilter"><option value="">Alle</option></select>
     </label>
@@ -213,7 +222,7 @@
     <label><input type="checkbox" class="chk" id="depToggle" checked> Vis afhængigheder</label>
   </div>
 
-  <section class="card">
+  <section class="card view-ov">
     <div class="card-head">
       <div>
         <h2>Tidslinje &amp; milepæle</h2>
@@ -224,18 +233,20 @@
     <details class="tblview"><summary>Vis som tabel</summary><div id="ganttTable"></div></details>
   </section>
 
-  <section class="card">
+  <section class="card" id="detailPage" style="display:none;">
     <div class="card-head">
       <div>
         <h2>Spor-detalje</h2>
-        <p class="desc">Vælg et spor og gå i dybden: status pr. opgave og delopgaver med medarbejder, timer og afkrydsning. Timer er estimat/fremdrift – de påvirker ikke belastnings-procenterne.</p>
+        <p class="desc">Gå i dybden med ét spor: status pr. opgave og delopgaver med medarbejder, timer og afkrydsning. Timer er estimat/fremdrift – de påvirker ikke belastnings-procenterne.</p>
       </div>
-      <select id="detailTrackSel" style="background:var(--surface-1);border:1px solid var(--border);border-radius:7px;padding:4px 8px;font-size:13px;"></select>
+      <label style="font-size:13px;color:var(--text-secondary);display:flex;align-items:center;gap:7px;">Spor
+        <select id="detailTrackSel" style="background:var(--surface-1);border:1px solid var(--border);border-radius:7px;padding:5px 9px;font-size:13.5px;"></select>
+      </label>
     </div>
     <div id="trackDetail"></div>
   </section>
 
-  <section class="card">
+  <section class="card view-ov">
     <div class="card-head">
       <div>
         <h2>Ressourcebelastning pr. måned</h2>
@@ -247,13 +258,13 @@
     <details class="tblview"><summary>Vis som tabel</summary><div id="heatTable"></div></details>
   </section>
 
-  <section class="card">
+  <section class="card view-ov">
     <h2>Advarsler</h2>
     <p class="desc">Automatisk beregnet: overbookede personer (&gt;100 %), overskredne deadlines, blokerede opgaver og afhængigheder hvor forudsætningen ligger for sent.</p>
     <div id="warnings"></div>
   </section>
 
-  <section class="card">
+  <section class="card view-ov">
     <h2>Redigér data</h2>
     <p class="desc">Ændringer slår igennem med det samme i tidslinje, heatmap og advarsler – og gemmes automatisk i databasen, så alle ser det samme.</p>
     <details class="editor">
@@ -1189,6 +1200,42 @@ function renderChangelog() {
   }).join('') + `<div style="font-size:11px;color:var(--text-muted);padding:6px 2px;">Viser de seneste ${CHANGELOG.length} ændringer — hele historikken ligger i databasen (plan_changelog).</div>`;
 }
 
+/* ================== VISNINGER (Overblik / Spor-detalje) ================== */
+function setView(v) {
+  state.view = v === 'detalje' ? 'detalje' : 'overblik';
+  document.querySelectorAll('.view-ov').forEach(el => el.style.display = state.view === 'overblik' ? '' : 'none');
+  const dp = $('#detailPage'); if (dp) dp.style.display = state.view === 'detalje' ? '' : 'none';
+  document.querySelectorAll('.viewtabs .vt').forEach(b => b.classList.toggle('active', b.dataset.view === state.view));
+  if (state.view === 'detalje') {
+    if (!trackById(state.detailTrack)) {
+      const first = visibleTracks().find(t => !t.baseline);
+      state.detailTrack = first ? first.id : '';
+      fillDetailTrackSel();
+    }
+    renderDetail();
+  } else {
+    refresh(false); /* gantt-bredden skal genberegnes efter at have været skjult */
+  }
+  updateViewHash();
+}
+/* URL-hash gør visningen link-bar (#detalje/nezasa) uden at spamme historikken */
+function updateViewHash() {
+  const h = state.view === 'detalje'
+    ? '#detalje' + (state.detailTrack ? '/' + encodeURIComponent(state.detailTrack) : '')
+    : location.pathname + location.search;
+  history.replaceState(null, '', h);
+}
+function applyViewHash() {
+  const m = location.hash.match(/^#detalje(?:\/(.+))?$/);
+  if (m) {
+    const tid = m[1] ? decodeURIComponent(m[1]) : '';
+    if (tid && trackById(tid)) { state.detailTrack = tid; fillDetailTrackSel(); }
+    setView('detalje');
+  } else {
+    setView('overblik');
+  }
+}
+
 /* ================== CONTROLS, AUTH & BOOT ================== */
 function fillFilters() {
   const pf = $('#personFilter'), tf = $('#trackFilter');
@@ -1200,7 +1247,9 @@ function initControls() {
   $('#personFilter').addEventListener('change', e => { state.person = e.target.value; refresh(false); });
   $('#trackFilter').addEventListener('change', e => { state.track = e.target.value; refresh(false); });
   $('#depToggle').addEventListener('change', e => { state.showDeps = e.target.checked; renderGantt(); });
-  $('#detailTrackSel').addEventListener('change', e => { state.detailTrack = e.target.value; renderDetail(); });
+  $('#detailTrackSel').addEventListener('change', e => { state.detailTrack = e.target.value; renderDetail(); updateViewHash(); });
+  document.querySelectorAll('.viewtabs .vt').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+  addEventListener('hashchange', applyViewHash);
   $('#themeBtn').addEventListener('click', () => {
     const cur = isDark() ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
@@ -1236,6 +1285,7 @@ function startUI() {
   fillDetailTrackSel();
   renderDetail();
   refresh(false);
+  applyViewHash(); /* åbn direkte i Spor-detalje hvis URL'en peger derhen */
 }
 async function boot() {
   if (booted) return; booted = true;
