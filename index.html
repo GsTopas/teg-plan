@@ -373,7 +373,7 @@ async function loadAll() {
   ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner, status:r.status || 'todo' }); });
   /* delopgaver er ikke kritiske — fejler tabellen, vises resten af planen alligevel */
   const st = await sb.from('plan_subtasks').select('*').order('created_at');
-  SUBTASKS = st.error ? [] : st.data.map(r => ({ id:r.id, msId:r.milestone_id, label:r.label, p:r.person_id, hours:(r.hours == null ? null : Number(r.hours)), done:r.done }));
+  SUBTASKS = st.error ? [] : st.data.map(r => ({ id:r.id, msId:r.milestone_id, label:r.label, p:r.person_id, hours:(r.hours == null ? null : Number(r.hours)), status:(r.status || (r.done ? 'faerdig' : 'todo')), done:(r.status ? r.status === 'faerdig' : r.done), due:r.due_date || null }));
   ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct, msId:r.milestone_id || null }));
   DEPS = de.data.map(r => ({ id:r.id, fromMs:r.from_ms, toT:r.to_track, toMs:r.to_ms, type:r.dep_type || 'start' }));
   /* ændringsloggen er ikke kritisk — fejler den, vises resten alligevel */
@@ -412,12 +412,12 @@ const DB = {
   delDep(id) { if (sb) dbTry(sb.from('plan_dependencies').delete().eq('id', id)); },
   async addSubtask(s) {
     if (!sb) { s.id = locId(); return true; }
-    const d = await dbTry(sb.from('plan_subtasks').insert({ milestone_id:s.msId, label:s.label, person_id:s.p || null, hours:s.hours, done:s.done }).select().single());
+    const d = await dbTry(sb.from('plan_subtasks').insert({ milestone_id:s.msId, label:s.label, person_id:s.p || null, hours:s.hours, status:s.status || 'todo', done:(s.status === 'faerdig'), due_date:s.due || null }).select().single());
     if (!d) return false;
     s.id = d.id;
     return true;
   },
-  updSubtask(s) { if (sb) dbTry(sb.from('plan_subtasks').update({ label:s.label, person_id:s.p || null, hours:s.hours, done:s.done }).eq('id', s.id)); },
+  updSubtask(s) { if (sb) dbTry(sb.from('plan_subtasks').update({ label:s.label, person_id:s.p || null, hours:s.hours, status:s.status || 'todo', done:(s.status === 'faerdig'), due_date:s.due || null }).eq('id', s.id)); },
   delSubtask(id) { if (sb) dbTry(sb.from('plan_subtasks').delete().eq('id', id)); },
 };
 function subscribeRealtime() {
@@ -1050,12 +1050,17 @@ function editingDetail() {
   const b = $('#trackDetail'), a = document.activeElement;
   return !!(b && a && b.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT'));
 }
+function localTodayISO() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
 function progText(ms) {
   const subs = msSubtasks(ms);
   if (!subs.length) return '';
   const hoursTot = subs.reduce((s, x) => s + (Number(x.hours) || 0), 0);
   const hoursDone = subs.reduce((s, x) => s + (x.done ? (Number(x.hours) || 0) : 0), 0);
-  return ` · ${subs.filter(x => x.done).length}/${subs.length} delopgaver${hoursTot ? ` · ${hoursDone}/${hoursTot} timer` : ''}`;
+  const late = subs.filter(x => !x.done && x.due && x.due < localTodayISO()).length;
+  return ` · ${subs.filter(x => x.done).length}/${subs.length} delopgaver${hoursTot ? ` · ${hoursDone}/${hoursTot} timer` : ''}${late ? ` · ${late} overskredet!` : ''}`;
 }
 function renderDetail() {
   const box = $('#trackDetail'); if (!box) return;
@@ -1081,13 +1086,20 @@ function renderDetail() {
         </select>
       </div>
       <div style="padding:0 11px 9px;">
-        ${subs.length ? `<table class="edit"><thead><tr><th></th><th>Delopgave</th><th>Medarbejder</th><th>Timer</th><th></th></tr></thead><tbody>
-        ${subs.map(s => `<tr style="${s.done ? 'opacity:.55;' : ''}">
-          <td><input type="checkbox" data-std="${s.id}" ${s.done ? 'checked' : ''} title="Færdig"></td>
+        ${subs.length ? `<table class="edit"><thead><tr><th>Status</th><th>Delopgave</th><th>Medarbejder</th><th>Timer</th><th>Senest</th><th></th></tr></thead><tbody>
+        ${subs.map(s => {
+          const late = !s.done && s.due && s.due < localTodayISO();
+          const sst = STATUS[s.status] || STATUS.todo;
+          return `<tr style="${s.done ? 'opacity:.55;' : ''}">
+          <td><select data-sts="${s.id}" style="border:1px solid ${sst.color};color:${sst.color};background:var(--surface-1);border-radius:6px;padding:2px 5px;font-size:12px;">
+            ${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${(s.status || 'todo') === k ? 'selected' : ''}>${v.label}</option>`).join('')}
+          </select></td>
           <td><input type="text" value="${esc(s.label)}" data-stl="${s.id}" style="width:240px;${s.done ? 'text-decoration:line-through;' : ''}"></td>
           <td><select data-stp="${s.id}"><option value="">–</option>${PEOPLE.map(p => `<option value="${p.id}" ${p.id === s.p ? 'selected' : ''}>${esc(personDisp(p))}</option>`).join('')}</select></td>
           <td><input type="number" min="0" step="1" value="${s.hours == null ? '' : s.hours}" data-sth="${s.id}" style="width:70px" placeholder="–"></td>
-          <td><button class="mini-btn" data-stdel="${s.id}" title="Slet delopgave">✕</button></td></tr>`).join('')}
+          <td><input type="date" data-stdue="${s.id}" value="${esc(s.due || '')}" style="width:135px;${late ? 'border-color:var(--status-critical);color:var(--status-critical);' : ''}" title="Valgfri: skal være færdig senest denne dato"></td>
+          <td><button class="mini-btn" data-stdel="${s.id}" title="Slet delopgave">✕</button></td></tr>`;
+        }).join('')}
         </tbody></table>` : ''}
         <button class="add-btn" data-stadd="${ms.id}" style="margin-top:0;">+ Tilføj delopgave</button>
       </div>
@@ -1111,10 +1123,13 @@ function renderDetail() {
     el.style.borderColor = st.color; el.style.color = st.color;
     refresh(false);
   }));
-  box.querySelectorAll('[data-std]').forEach(el => el.addEventListener('change', () => {
-    const s = sub(el.dataset.std); if (!s) return;
-    s.done = el.checked;
+  box.querySelectorAll('[data-sts]').forEach(el => el.addEventListener('change', () => {
+    const s = sub(el.dataset.sts); if (!s) return;
+    s.status = el.value;
+    s.done = s.status === 'faerdig';
     DB.updSubtask(s);
+    const sst = STATUS[s.status] || STATUS.todo;
+    el.style.borderColor = sst.color; el.style.color = sst.color;
     const tr = el.closest('tr');
     if (tr) {
       tr.style.opacity = s.done ? '.55' : '';
@@ -1147,6 +1162,16 @@ function renderDetail() {
     updProg(s.msId);
     refresh(false);
   }));
+  box.querySelectorAll('[data-stdue]').forEach(el => el.addEventListener('change', () => {
+    const s = sub(el.dataset.stdue); if (!s) return;
+    s.due = el.value || null;
+    DB.updSubtask(s);
+    const late = !s.done && s.due && s.due < localTodayISO();
+    el.style.borderColor = late ? 'var(--status-critical)' : '';
+    el.style.color = late ? 'var(--status-critical)' : '';
+    updProg(s.msId);
+    refresh(false);
+  }));
   box.querySelectorAll('[data-stdel]').forEach(el => el.addEventListener('click', () => {
     const s = sub(el.dataset.stdel); if (!s) return;
     DB.delSubtask(s.id);
@@ -1154,7 +1179,7 @@ function renderDetail() {
     refresh(false); /* renderDetail genopbygger — knap-fokus blokerer ikke guarden */
   }));
   box.querySelectorAll('[data-stadd]').forEach(el => el.addEventListener('click', async () => {
-    const s = { msId: el.dataset.stadd, label: 'Ny delopgave', p: null, hours: null, done: false };
+    const s = { msId: el.dataset.stadd, label: 'Ny delopgave', p: null, hours: null, status: 'todo', done: false, due: null };
     if (!(await DB.addSubtask(s))) return;
     SUBTASKS.push(s);
     refresh(false);
@@ -1169,7 +1194,7 @@ function renderChangelog() {
     return;
   }
   const tblNavn = { plan_milestones:'punktet', plan_allocations:'allokeringen', plan_tracks:'sporet', plan_dependencies:'en afhængighed', plan_people:'personen', plan_subtasks:'delopgaven' };
-  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig' };
+  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig', due_date:'senest' };
   const mdr = i => (typeof i === 'number' && MONTHS[i]) ? MONTHS[i].full : i;
   const vis = (k, v) => {
     if (v == null) return '–';
