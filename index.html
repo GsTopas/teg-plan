@@ -217,11 +217,22 @@
     <div class="card-head">
       <div>
         <h2>Tidslinje &amp; milepæle</h2>
-        <p class="desc">Øverste linje pr. spor = sporets samlede periode · bjælker = opgaver med ◆ ved deadline · pile = afhængigheder (rød = konflikt, stiplet = "færdig før afslutning") · lodret linje = i dag.</p>
+        <p class="desc">Øverste linje pr. spor = sporets samlede periode · bjælker = opgaver med ◆ ved deadline · status: ● i gang, ✓ færdig (nedtonet), ⚠ blokeret · pile = afhængigheder (rød = konflikt, stiplet = "færdig før afslutning") · lodret linje = i dag.</p>
       </div>
     </div>
     <div id="gantt-outer"><div id="gantt"></div></div>
     <details class="tblview"><summary>Vis som tabel</summary><div id="ganttTable"></div></details>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <h2>Spor-detalje</h2>
+        <p class="desc">Vælg et spor og gå i dybden: status pr. opgave og delopgaver med medarbejder, timer og afkrydsning. Timer er estimat/fremdrift – de påvirker ikke belastnings-procenterne.</p>
+      </div>
+      <select id="detailTrackSel" style="background:var(--surface-1);border:1px solid var(--border);border-radius:7px;padding:4px 8px;font-size:13px;"></select>
+    </div>
+    <div id="trackDetail"></div>
   </section>
 
   <section class="card">
@@ -238,7 +249,7 @@
 
   <section class="card">
     <h2>Advarsler</h2>
-    <p class="desc">Automatisk beregnet: overbookede personer (&gt;100 %) og afhængigheder hvor forudsætningen ligger efter – eller klods op ad – det afhængige projekts start.</p>
+    <p class="desc">Automatisk beregnet: overbookede personer (&gt;100 %), overskredne deadlines, blokerede opgaver og afhængigheder hvor forudsætningen ligger for sent.</p>
     <div id="warnings"></div>
   </section>
 
@@ -314,7 +325,7 @@ const TODAY_X = (() => {
 })();
 
 /* ================== DATA (fyldes fra Supabase eller demo-seed) ================== */
-let PEOPLE = [], TRACKS = [], ALLOC = [], DEPS = [], CHANGELOG = [];
+let PEOPLE = [], TRACKS = [], ALLOC = [], DEPS = [], CHANGELOG = [], SUBTASKS = [];
 let sb = null, localSeq = 0, booted = false;
 const locId = () => 'loc-' + (++localSeq);
 
@@ -346,8 +357,12 @@ async function loadAll() {
   ]);
   for (const r of [pe, tr, ms, al, de]) if (r.error) { toast('Kunne ikke hente data: ' + r.error.message); return; }
   PEOPLE = pe.data.map(r => ({ id:r.id, name:r.name, role:r.role }));
-  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:r.color, from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, milestones:[] }));
-  ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner }); });
+  /* farve-slottet interpoleres i style-attributter — accepter kun kendte slots */
+  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:(/^--s-[a-z]+$/.test(r.color || '') ? r.color : '--s-gray'), from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, milestones:[] }));
+  ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner, status:r.status || 'todo' }); });
+  /* delopgaver er ikke kritiske — fejler tabellen, vises resten af planen alligevel */
+  const st = await sb.from('plan_subtasks').select('*').order('created_at');
+  SUBTASKS = st.error ? [] : st.data.map(r => ({ id:r.id, msId:r.milestone_id, label:r.label, p:r.person_id, hours:(r.hours == null ? null : Number(r.hours)), done:r.done }));
   ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct, msId:r.milestone_id || null }));
   DEPS = de.data.map(r => ({ id:r.id, fromMs:r.from_ms, toT:r.to_track, toMs:r.to_ms, type:r.dep_type || 'start' }));
   /* ændringsloggen er ikke kritisk — fejler den, vises resten alligevel */
@@ -357,12 +372,12 @@ async function loadAll() {
 const DB = {
   async addMilestone(tid, ms) {
     if (!sb) { ms.id = locId(); return true; }
-    const d = await dbTry(sb.from('plan_milestones').insert({ track_id:tid, m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner }).select().single());
+    const d = await dbTry(sb.from('plan_milestones').insert({ track_id:tid, m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner, status:ms.status || 'todo' }).select().single());
     if (!d) return false;
     ms.id = d.id;
     return true;
   },
-  updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner }).eq('id', ms.id)); },
+  updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner, status:ms.status || 'todo' }).eq('id', ms.id)); },
   delMilestone(id) { if (sb) dbTry(sb.from('plan_milestones').delete().eq('id', id)); },
   updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, from_m:t.from, solid_to:t.solidTo, to_m:t.to }).eq('id', t.id)); },
   async addAlloc(a) {
@@ -384,6 +399,15 @@ const DB = {
   },
   updDep(d0) { if (sb) dbTry(sb.from('plan_dependencies').update({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs, dep_type:d0.type || 'start' }).eq('id', d0.id)); },
   delDep(id) { if (sb) dbTry(sb.from('plan_dependencies').delete().eq('id', id)); },
+  async addSubtask(s) {
+    if (!sb) { s.id = locId(); return true; }
+    const d = await dbTry(sb.from('plan_subtasks').insert({ milestone_id:s.msId, label:s.label, person_id:s.p || null, hours:s.hours, done:s.done }).select().single());
+    if (!d) return false;
+    s.id = d.id;
+    return true;
+  },
+  updSubtask(s) { if (sb) dbTry(sb.from('plan_subtasks').update({ label:s.label, person_id:s.p || null, hours:s.hours, done:s.done }).eq('id', s.id)); },
+  delSubtask(id) { if (sb) dbTry(sb.from('plan_subtasks').delete().eq('id', id)); },
 };
 function subscribeRealtime() {
   if (!sb) return;
@@ -391,14 +415,14 @@ function subscribeRealtime() {
   /* Genbyg ikke editorerne mens en ejer-popup er åben — det ville lukke den midt i valget */
   const reload = () => { clearTimeout(t); t = setTimeout(async () => { await loadAll(); refresh(!document.querySelector('details.owner-pick[open]')); }, 350); };
   const ch = sb.channel('plan-sync');
-  ['plan_people','plan_tracks','plan_milestones','plan_allocations','plan_dependencies','plan_changelog']
+  ['plan_people','plan_tracks','plan_milestones','plan_allocations','plan_dependencies','plan_changelog','plan_subtasks']
     .forEach(tb => ch.on('postgres_changes', { event:'*', schema:'public', table:tb }, reload));
   ch.subscribe();
 }
 
 /* ================== HJÆLPERE ================== */
 const $ = s => document.querySelector(s);
-const state = { person:'', track:'', showDeps:true };
+const state = { person:'', track:'', showDeps:true, detailTrack:'' };
 const openMsGroups = new Set(); /* hvilke spor-grupper i punkt-editoren der står åbne */
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const trackById = id => TRACKS.find(t => t.id === id);
@@ -568,14 +592,18 @@ function renderGantt() {
         msY[ms.id] = y + rowY + 21;
         const msAl = ALLOC.filter(a => a.msId === ms.id);
         const who = msAl.length ? msAl.map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ') : (ms.owner || '');
-        const txt = `${esc(ms.label)}${who ? `<span style="color:var(--text-muted);"> · ${esc(who)}</span>` : ''}`;
+        const stIcon = ms.status === 'faerdig' ? '<span style="color:var(--status-good);">✓</span> '
+                     : ms.status === 'blokeret' ? '<span style="color:var(--status-critical);">⚠</span> '
+                     : ms.status === 'igang' ? '<span style="color:var(--s-blue);">●</span> ' : '';
+        const dimDone = ms.status === 'faerdig';
+        const txt = `${stIcon}${esc(ms.label)}${who ? `<span style="color:var(--text-muted);"> · ${esc(who)}</span>` : ''}`;
         /* label OVER bjælken, venstrestillet ved dens start — klemt inden for plottet,
            så lange tekster på sene opgaver ikke ryger ud over højre kant */
         const estW = (ms.label.length + (who ? who.length + 3 : 0)) * 5.9;
         const lblX = Math.max(G.labelW + 2, Math.min(bx1 + 1, W - estW - 8));
         html += `<div style="position:absolute;left:${lblX}px;top:${rowY+1}px;font-size:10.5px;color:var(--text-secondary);white-space:nowrap;">${txt}</div>`;
-        html += `<div style="position:absolute;left:${bx1}px;top:${rowY+15}px;width:${bx2-bx1}px;height:12px;border-radius:6px;background:${col};opacity:.30;"></div>`;
-        html += `<div data-ms="${ms.id}" tabindex="0" style="position:absolute;left:${mx-5}px;top:${rowY+15.5}px;width:11px;height:11px;background:${col};transform:rotate(45deg);border:2px solid var(--surface-1);border-radius:2px;cursor:default;"></div>`;
+        html += `<div style="position:absolute;left:${bx1}px;top:${rowY+15}px;width:${bx2-bx1}px;height:12px;border-radius:6px;background:${col};opacity:${dimDone ? '.14' : '.30'};"></div>`;
+        html += `<div data-ms="${ms.id}" tabindex="0" style="position:absolute;left:${mx-5}px;top:${rowY+15.5}px;width:11px;height:11px;background:${col};transform:rotate(45deg);border:2px solid var(--surface-1);border-radius:2px;cursor:default;${dimDone ? 'opacity:.55;' : ''}"></div>`;
       });
     }
     html += `</div>`;
@@ -624,6 +652,7 @@ function renderGantt() {
     const html2 = `<div class="tt-title">◆ ${esc(ms.label)}</div>
       <div class="tt-row"><span>Spor</span><b>${esc(t.name)}</b></div>
       <div class="tt-row"><span>Periode</span><b>${ms.from < ms.m ? MONTHS[ms.from].full + ' – ' + MONTHS[ms.m].full : MONTHS[ms.m].full}</b></div>
+      <div class="tt-row"><span>Status</span><b style="color:${(STATUS[ms.status] || STATUS.todo).color};">${(STATUS[ms.status] || STATUS.todo).label}</b></div>
       <div class="tt-row"><span>Personer</span><b>${esc(persons)}</b></div>
       ${depsOut.map(d => { const T = depTo(d); return T ? `<div class="tt-row"><span>Forudsætning for${d.type==='finish'?' (afslutning)':''}</span><b>${T.ms ? esc(T.ms.label) : esc(T.t.name)}</b></div>` : ''; }).join('')}
       ${depsIn.map(d => { const F = depFrom(d); return F ? `<div class="tt-row"><span>Afhænger af${d.type==='finish'?' (før afslutning)':''}</span><b>${esc(F.ms.label)}</b></div>` : ''; }).join('')}`;
@@ -697,6 +726,17 @@ function renderWarnings() {
       }
     }
   });
+  /* overskredne deadlines og blokerede opgaver */
+  const nowIdx = Math.floor(TODAY_X);
+  TRACKS.filter(t => !t.baseline).forEach(t => t.milestones.forEach(ms => {
+    if (ms.m < nowIdx && ms.status !== 'faerdig') {
+      const st = STATUS[ms.status] || STATUS.todo;
+      items.push({ level: ms.status === 'blokeret' ? 'crit' : 'warn',
+        html: `<b>Deadline overskredet:</b> "${esc(ms.label)}" (${esc(t.name)}) havde deadline ${MONTHS[ms.m].full} og står stadig som "${st.label.toLowerCase()}".` });
+    } else if (ms.status === 'blokeret') {
+      items.push({ level:'warn', html: `<b>Blokeret:</b> "${esc(ms.label)}" (${esc(t.name)}) er markeret blokeret – afklar, hvad der spærrer.` });
+    }
+  }));
   DEPS.forEach(dep => {
     const st = depStatus(dep);
     if (st === 'ok') return;
@@ -817,7 +857,8 @@ function renderMsEditor() {
     found.t.milestones = found.t.milestones.filter(m => m.id !== id);
     DEPS = DEPS.filter(d => d.fromMs !== id && d.toMs !== id);
     ALLOC = ALLOC.filter(a => a.msId !== id);
-    DB.delMilestone(id);  /* DB kaskade-sletter selv afhængigheder og allokeringer */
+    SUBTASKS = SUBTASKS.filter(s => s.msId !== id);
+    DB.delMilestone(id);  /* DB kaskade-sletter selv afhængigheder, allokeringer og delopgaver */
     refresh(true);
   }));
   $('#msEditor').querySelectorAll('[data-addms]').forEach(btn => btn.addEventListener('click', async () => {
@@ -979,6 +1020,136 @@ function renderDepEditor() {
   });
 }
 
+/* ================== SPOR-DETALJE ================== */
+const STATUS = {
+  todo:     { label:'Ikke startet', color:'var(--text-muted)' },
+  igang:    { label:'I gang',       color:'var(--s-blue)' },
+  faerdig:  { label:'Færdig',       color:'var(--status-good)' },
+  blokeret: { label:'Blokeret',     color:'var(--status-critical)' },
+};
+const msSubtasks = ms => SUBTASKS.filter(s => s.msId === ms.id);
+function fillDetailTrackSel() {
+  const sel = $('#detailTrackSel'); if (!sel) return;
+  sel.innerHTML = '<option value="">– vælg spor –</option>' +
+    visibleTracks().filter(t => !t.baseline).map(t => `<option value="${esc(t.id)}" ${state.detailTrack === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
+}
+/* Riv ikke detalje-DOM'en ned, mens brugeren står i et input/select — hverken
+   ved realtime-echo eller andre refreshes. Knapper tæller ikke som indtastning. */
+function editingDetail() {
+  const b = $('#trackDetail'), a = document.activeElement;
+  return !!(b && a && b.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT'));
+}
+function progText(ms) {
+  const subs = msSubtasks(ms);
+  if (!subs.length) return '';
+  const hoursTot = subs.reduce((s, x) => s + (Number(x.hours) || 0), 0);
+  const hoursDone = subs.reduce((s, x) => s + (x.done ? (Number(x.hours) || 0) : 0), 0);
+  return ` · ${subs.filter(x => x.done).length}/${subs.length} delopgaver${hoursTot ? ` · ${hoursDone}/${hoursTot} timer` : ''}`;
+}
+function renderDetail() {
+  const box = $('#trackDetail'); if (!box) return;
+  if (editingDetail()) return;
+  const t = trackById(state.detailTrack);
+  if (!t) {
+    box.innerHTML = '<div style="font-size:12.5px;color:var(--text-muted);padding:4px 2px;">Vælg et spor i menuen øverst til højre for at se opgaver, status og delopgaver.</div>';
+    return;
+  }
+  const col = `var(${t.color})`;
+  let html = '';
+  t.milestones.slice().sort((a, b) => (a.from - b.from) || (a.m - b.m)).forEach(ms => {
+    const subs = msSubtasks(ms);
+    const st = STATUS[ms.status] || STATUS.todo;
+    const who = ALLOC.filter(a => a.msId === ms.id).map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ');
+    html += `<div style="border:1px solid var(--grid);border-radius:8px;margin:7px 0;">
+      <div style="display:flex;align-items:center;gap:9px;padding:8px 11px;flex-wrap:wrap;">
+        <span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};"></span>
+        <b style="font-size:13px;">${esc(ms.label)}</b>
+        <span style="font-size:12px;color:var(--text-muted);">${MONTHS[ms.from].full} – ${MONTHS[ms.m].full}${who ? ' · ' + esc(who) : ''}<span data-prog="${esc(ms.id)}">${progText(ms)}</span></span>
+        <select data-mst="${ms.id}" style="margin-left:auto;border:1px solid ${st.color};color:${st.color};background:var(--surface-1);border-radius:6px;padding:3px 6px;font-size:12.5px;">
+          ${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${(ms.status || 'todo') === k ? 'selected' : ''}>${v.label}</option>`).join('')}
+        </select>
+      </div>
+      <div style="padding:0 11px 9px;">
+        ${subs.length ? `<table class="edit"><thead><tr><th></th><th>Delopgave</th><th>Medarbejder</th><th>Timer</th><th></th></tr></thead><tbody>
+        ${subs.map(s => `<tr style="${s.done ? 'opacity:.55;' : ''}">
+          <td><input type="checkbox" data-std="${s.id}" ${s.done ? 'checked' : ''} title="Færdig"></td>
+          <td><input type="text" value="${esc(s.label)}" data-stl="${s.id}" style="width:240px;${s.done ? 'text-decoration:line-through;' : ''}"></td>
+          <td><select data-stp="${s.id}"><option value="">–</option>${PEOPLE.map(p => `<option value="${p.id}" ${p.id === s.p ? 'selected' : ''}>${esc(personDisp(p))}</option>`).join('')}</select></td>
+          <td><input type="number" min="0" step="1" value="${s.hours == null ? '' : s.hours}" data-sth="${s.id}" style="width:70px" placeholder="–"></td>
+          <td><button class="mini-btn" data-stdel="${s.id}" title="Slet delopgave">✕</button></td></tr>`).join('')}
+        </tbody></table>` : ''}
+        <button class="add-btn" data-stadd="${ms.id}" style="margin-top:0;">+ Tilføj delopgave</button>
+      </div>
+    </div>`;
+  });
+  if (!t.milestones.length) html = '<div style="font-size:12.5px;color:var(--text-muted);padding:4px 2px;">Sporet har ingen opgaver endnu – opret dem i punkt-editoren under Redigér data.</div>';
+  box.innerHTML = html;
+  /* Håndteringen opdaterer småting direkte i DOM'en og kalder refresh(false) —
+     fuld genopbygning ville smide brugerens fokus væk midt i arbejdet.
+     renderDetail kører alligevel ved næste refresh uden aktiv indtastning. */
+  const sub = id => SUBTASKS.find(x => x.id === id);
+  const updProg = msId => {
+    const f = findMs(msId), pr = box.querySelector(`[data-prog="${msId}"]`);
+    if (f && pr) pr.textContent = progText(f.ms);
+  };
+  box.querySelectorAll('[data-mst]').forEach(el => el.addEventListener('change', () => {
+    const f = findMs(el.dataset.mst); if (!f) return;
+    f.ms.status = el.value;
+    DB.updMilestone(f.ms);
+    const st = STATUS[el.value] || STATUS.todo;
+    el.style.borderColor = st.color; el.style.color = st.color;
+    refresh(false);
+  }));
+  box.querySelectorAll('[data-std]').forEach(el => el.addEventListener('change', () => {
+    const s = sub(el.dataset.std); if (!s) return;
+    s.done = el.checked;
+    DB.updSubtask(s);
+    const tr = el.closest('tr');
+    if (tr) {
+      tr.style.opacity = s.done ? '.55' : '';
+      const li = tr.querySelector('input[type=text]');
+      if (li) li.style.textDecoration = s.done ? 'line-through' : '';
+    }
+    updProg(s.msId);
+    refresh(false);
+  }));
+  box.querySelectorAll('[data-stl]').forEach(el => el.addEventListener('change', () => {
+    const s = sub(el.dataset.stl); if (!s) return;
+    s.label = el.value || 'Delopgave';
+    DB.updSubtask(s);
+    refresh(false);
+  }));
+  box.querySelectorAll('[data-stp]').forEach(el => el.addEventListener('change', () => {
+    const s = sub(el.dataset.stp); if (!s) return;
+    s.p = el.value || null;
+    DB.updSubtask(s);
+    refresh(false);
+  }));
+  box.querySelectorAll('[data-sth]').forEach(el => el.addEventListener('change', () => {
+    const s = sub(el.dataset.sth); if (!s) return;
+    let v = el.value === '' ? null : Number(el.value);
+    if (v != null && !isFinite(v)) v = null;          /* fx "1e999" -> Infinity */
+    if (v != null) v = Math.min(10000, Math.max(0, v));
+    s.hours = v;
+    el.value = v == null ? '' : v;
+    DB.updSubtask(s);
+    updProg(s.msId);
+    refresh(false);
+  }));
+  box.querySelectorAll('[data-stdel]').forEach(el => el.addEventListener('click', () => {
+    const s = sub(el.dataset.stdel); if (!s) return;
+    DB.delSubtask(s.id);
+    SUBTASKS = SUBTASKS.filter(x => x !== s);
+    refresh(false); /* renderDetail genopbygger — knap-fokus blokerer ikke guarden */
+  }));
+  box.querySelectorAll('[data-stadd]').forEach(el => el.addEventListener('click', async () => {
+    const s = { msId: el.dataset.stadd, label: 'Ny delopgave', p: null, hours: null, done: false };
+    if (!(await DB.addSubtask(s))) return;
+    SUBTASKS.push(s);
+    refresh(false);
+  }));
+}
+
 /* ================== ÆNDRINGSLOG ================== */
 function renderChangelog() {
   const el = $('#changelogView'); if (!el) return;
@@ -986,10 +1157,14 @@ function renderChangelog() {
     el.innerHTML = '<div style="font-size:12.5px;color:var(--text-muted);padding:6px 2px;">Ingen ændringer logget endnu.</div>';
     return;
   }
-  const tblNavn = { plan_milestones:'punktet', plan_allocations:'allokeringen', plan_tracks:'sporet', plan_dependencies:'en afhængighed', plan_people:'personen' };
-  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt' };
+  const tblNavn = { plan_milestones:'punktet', plan_allocations:'allokeringen', plan_tracks:'sporet', plan_dependencies:'en afhængighed', plan_people:'personen', plan_subtasks:'delopgaven' };
+  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig' };
   const mdr = i => (typeof i === 'number' && MONTHS[i]) ? MONTHS[i].full : i;
-  const vis = (k, v) => v == null ? '–' : (['m','from_m','to_m','solid_to'].includes(k) ? mdr(v) : String(v));
+  const vis = (k, v) => {
+    if (v == null) return '–';
+    if (k === 'status') return (STATUS[v] || { label: v }).label;
+    return ['m','from_m','to_m','solid_to'].includes(k) ? mdr(v) : String(v);
+  };
   el.innerHTML = CHANGELOG.map(c => {
     const d = new Date(c.changed_at);
     const when = d.toLocaleDateString('da-DK', { day:'numeric', month:'short' }) + ' ' +
@@ -1025,13 +1200,14 @@ function initControls() {
   $('#personFilter').addEventListener('change', e => { state.person = e.target.value; refresh(false); });
   $('#trackFilter').addEventListener('change', e => { state.track = e.target.value; refresh(false); });
   $('#depToggle').addEventListener('change', e => { state.showDeps = e.target.checked; renderGantt(); });
+  $('#detailTrackSel').addEventListener('change', e => { state.detailTrack = e.target.value; renderDetail(); });
   $('#themeBtn').addEventListener('click', () => {
     const cur = isDark() ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
     refresh(false);
   });
   $('#exportBtn').addEventListener('click', async () => {
-    const data = JSON.stringify({ horizon:'2026-07..2027-12', people:PEOPLE, tracks:TRACKS, allocations:ALLOC, dependencies:DEPS }, null, 2);
+    const data = JSON.stringify({ horizon:'2026-07..2027-12', people:PEOPLE, tracks:TRACKS, allocations:ALLOC, dependencies:DEPS, subtasks:SUBTASKS }, null, 2);
     try { await navigator.clipboard.writeText(data); $('#exportBtn').textContent = 'Kopieret ✓'; }
     catch { const b = new Blob([data], {type:'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href=u; a.download='teg-plan-data.json'; a.click(); }
     setTimeout(() => $('#exportBtn').textContent = 'Kopiér data (JSON)', 1800);
@@ -1044,9 +1220,10 @@ function refresh(rebuildEditors) {
   renderGantt();
   renderHeat();
   renderWarnings();
-  if (rebuildEditors) { renderTrackEditor(); renderMsEditor(); renderAllocEditor(); }
+  if (rebuildEditors) { renderTrackEditor(); renderMsEditor(); renderAllocEditor(); fillDetailTrackSel(); }
   renderDepEditor(); /* status-kolonnen kan ændre sig ved alle redigeringer */
   renderChangelog();
+  renderDetail(); /* altid — viser data der ændres fra andre editorer; springer selv over ved aktiv indtastning */
 }
 function startUI() {
   fillFilters();
@@ -1056,6 +1233,8 @@ function startUI() {
   renderTrackEditor();
   renderMsEditor();
   renderAllocEditor();
+  fillDetailTrackSel();
+  renderDetail();
   refresh(false);
 }
 async function boot() {
