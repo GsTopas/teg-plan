@@ -183,6 +183,13 @@
   details.tblview th { color: var(--text-muted); font-weight: 500; font-size: 11.5px; }
   details.tblview td.num { font-variant-numeric: tabular-nums; text-align: right; }
   .note { font-size: 12px; color: var(--text-muted); margin-top: 14px; border-top: 1px solid var(--grid); padding-top: 10px; }
+  #msQuickEdit { position: fixed; z-index: 95; background: var(--surface-1); border: 1px solid var(--axis); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.35); padding: 12px 14px; width: 330px; display: none; }
+  #msQuickEdit .qe-row { display: flex; gap: 7px; align-items: center; margin: 7px 0; font-size: 12.5px; color: var(--text-secondary); flex-wrap: wrap; }
+  #msQuickEdit input, #msQuickEdit select { background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 12.5px; color: var(--text-primary); }
+  #msQuickEdit input[type=text] { width: 100%; }
+  #msQuickEdit input[type=number] { width: 56px; }
+  #msQuickEdit .qe-person { display: flex; gap: 7px; align-items: center; padding: 2px 0; font-size: 12.5px; }
+  #msQuickEdit .qe-person span { flex: 1; }
   .viewtabs { display: flex; gap: 6px; margin: 0 0 12px; }
   .viewtabs .vt { background: var(--surface-1); border: 1px solid var(--border); border-radius: 9px; padding: 7px 18px; font-size: 13.5px; cursor: pointer; color: var(--text-secondary); }
   .viewtabs .vt.active { color: var(--text-primary); border-color: var(--axis); font-weight: 650; }
@@ -292,6 +299,7 @@
 
   <footer>TEG 18-måneders digitaliseringsplan · genereret 14. juli 2026 · baseret på “TEG 3 Års Digitaliserings plan”.</footer>
 </div>
+<div id="msQuickEdit"></div>
 <div id="tooltip" role="tooltip"></div>
 
 <div id="authOverlay" style="display:none;position:fixed;inset:0;background:var(--page);z-index:100;align-items:center;justify-content:center;">
@@ -614,7 +622,7 @@ function renderGantt() {
         const lblX = Math.max(G.labelW + 2, Math.min(bx1 + 1, W - estW - 8));
         html += `<div style="position:absolute;left:${lblX}px;top:${rowY+1}px;font-size:10.5px;color:var(--text-secondary);white-space:nowrap;">${txt}</div>`;
         html += `<div style="position:absolute;left:${bx1}px;top:${rowY+15}px;width:${bx2-bx1}px;height:12px;border-radius:6px;background:${col};opacity:${dimDone ? '.14' : '.30'};"></div>`;
-        html += `<div data-ms="${ms.id}" tabindex="0" style="position:absolute;left:${mx-5}px;top:${rowY+15.5}px;width:11px;height:11px;background:${col};transform:rotate(45deg);border:2px solid var(--surface-1);border-radius:2px;cursor:default;${dimDone ? 'opacity:.55;' : ''}"></div>`;
+        html += `<div data-ms="${ms.id}" tabindex="0" role="button" title="Klik for at redigere" style="position:absolute;left:${mx-5}px;top:${rowY+15.5}px;width:11px;height:11px;background:${col};transform:rotate(45deg);border:2px solid var(--surface-1);border-radius:2px;cursor:pointer;${dimDone ? 'opacity:.55;' : ''}"></div>`;
       });
     }
     html += `</div>`;
@@ -671,6 +679,8 @@ function renderGantt() {
     el.addEventListener('mouseleave', hideTT);
     el.addEventListener('focus', () => { const r = el.getBoundingClientRect(); showTT(html2, r.left, r.bottom); });
     el.addEventListener('blur', hideTT);
+    el.addEventListener('click', e => { e.stopPropagation(); hideTT(); openMsQuickEdit(ms.id, e.clientX, e.clientY); });
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') { hideTT(); const r = el.getBoundingClientRect(); openMsQuickEdit(ms.id, r.left, r.bottom + 6); } });
   });
 
   $('#ganttTable').innerHTML = `<table><thead><tr><th>Spor</th><th>Ejer</th><th>Aktiv fase</th><th>Milepæle</th></tr></thead><tbody>` +
@@ -1261,6 +1271,92 @@ function applyViewHash() {
   }
 }
 
+/* ================== HURTIG-REDIGERING FRA TIDSLINJEN ================== */
+function closeMsQuickEdit() {
+  const qe = $('#msQuickEdit'); if (!qe) return;
+  qe.style.display = 'none';
+  qe.innerHTML = '';
+  delete qe.dataset.ms;
+}
+function openMsQuickEdit(msId, x, y) {
+  const found = findMs(msId); if (!found) return;
+  const { t, ms } = found;
+  const qe = $('#msQuickEdit');
+  const st = STATUS[ms.status] || STATUS.todo;
+  const alFor = pid => ALLOC.find(a => a.msId === ms.id && a.p === pid);
+  qe.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(${t.color});"></span>
+      <b style="font-size:13px;flex:1;">${esc(t.name)}</b>
+      <button class="mini-btn" id="qeClose" title="Luk">✕</button>
+    </div>
+    <input type="text" id="qeLabel" value="${esc(ms.label)}">
+    <div class="qe-row">Fra <select id="qeFrom">${monthOptions(ms.from)}</select> Deadline <select id="qeM">${monthOptions(ms.m)}</select></div>
+    <div class="qe-row">Status <select id="qeStatus" style="border-color:${st.color};color:${st.color};">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${(ms.status || 'todo') === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+    <div style="font-size:11.5px;color:var(--text-muted);margin-top:9px;">Personer &amp; %</div>
+    ${PEOPLE.map(p => { const a = alFor(p.id);
+      return `<div class="qe-person"><input type="checkbox" data-qep="${p.id}" ${a ? 'checked' : ''}><span>${esc(personDisp(p))}</span><input type="number" min="0" max="150" step="5" data-qepct="${p.id}" value="${a ? a.pct : 20}" ${a ? '' : 'disabled'}> %</div>`; }).join('')}
+    <div class="qe-row" style="margin-top:10px;">
+      <a href="#detalje/${encodeURIComponent(t.id)}" id="qeDetail" style="font-size:12.5px;color:var(--s-blue);">Åbn i Spor-detalje →</a>
+    </div>`;
+  qe.style.display = 'block';
+  qe.dataset.ms = msId;
+  const r = qe.getBoundingClientRect();
+  qe.style.left = Math.max(8, Math.min(x + 10, innerWidth - r.width - 12)) + 'px';
+  qe.style.top = Math.max(8, Math.min(y + 12, innerHeight - r.height - 12)) + 'px';
+  const syncOwner = () => {
+    ms.owner = ALLOC.filter(a => a.msId === ms.id).map(a => (personById(a.p) || { name: a.p }).name).join(', ');
+  };
+  $('#qeClose').addEventListener('click', closeMsQuickEdit);
+  $('#qeLabel').addEventListener('change', e => { ms.label = e.target.value || 'Punkt'; DB.updMilestone(ms); refresh(true); });
+  $('#qeFrom').addEventListener('change', e => {
+    ms.from = Number(e.target.value); if (ms.from > ms.m) { ms.m = ms.from; $('#qeM').value = String(ms.m); }
+    DB.updMilestone(ms); refresh(true);
+  });
+  $('#qeM').addEventListener('change', e => {
+    ms.m = Number(e.target.value); if (ms.from > ms.m) { ms.from = ms.m; $('#qeFrom').value = String(ms.from); }
+    DB.updMilestone(ms); refresh(true);
+  });
+  $('#qeStatus').addEventListener('change', e => {
+    ms.status = e.target.value;
+    const s2 = STATUS[ms.status] || STATUS.todo;
+    e.target.style.borderColor = s2.color; e.target.style.color = s2.color;
+    DB.updMilestone(ms); refresh(true);
+  });
+  qe.querySelectorAll('[data-qep]').forEach(cb => cb.addEventListener('change', async () => {
+    const pid = cb.dataset.qep;
+    const pctInput = qe.querySelector(`[data-qepct="${pid}"]`);
+    if (cb.checked) {
+      const a = { p: pid, t: t.id, msId: ms.id, from: ms.from, to: ms.m, pct: Number(pctInput.value) || 20 };
+      if (!(await DB.addAlloc(a))) { cb.checked = false; return; }
+      ALLOC.push(a);
+      pctInput.disabled = false;
+    } else {
+      const a = ALLOC.find(x => x.msId === ms.id && x.p === pid);
+      if (a) { DB.delAlloc(a.id); ALLOC = ALLOC.filter(x => x !== a); }
+      pctInput.disabled = true;
+    }
+    syncOwner();
+    DB.updMilestone(ms);
+    refresh(true);
+  }));
+  qe.querySelectorAll('[data-qepct]').forEach(inp => inp.addEventListener('change', () => {
+    const a = ALLOC.find(x => x.msId === ms.id && x.p === inp.dataset.qepct); if (!a) return;
+    a.pct = Number(inp.value) || 0;
+    DB.updAlloc(a);
+    syncOwner();
+    DB.updMilestone(ms);
+    refresh(true);
+  }));
+  $('#qeDetail').addEventListener('click', e => {
+    e.preventDefault();
+    closeMsQuickEdit();
+    state.detailTrack = t.id;
+    fillDetailTrackSel();
+    setView('detalje');
+  });
+}
+
 /* ================== CONTROLS, AUTH & BOOT ================== */
 function fillFilters() {
   const pf = $('#personFilter'), tf = $('#trackFilter');
@@ -1291,6 +1387,9 @@ function initControls() {
   if (matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => refresh(false));
 }
 function refresh(rebuildEditors) {
+  /* luk hurtig-redigeringen hvis dens punkt er forsvundet (fx slettet af en kollega) */
+  const qe = $('#msQuickEdit');
+  if (qe && qe.style.display !== 'none' && qe.dataset.ms && !findMs(qe.dataset.ms)) closeMsQuickEdit();
   renderGantt();
   renderHeat();
   renderWarnings();
@@ -1303,7 +1402,10 @@ function startUI() {
   fillFilters();
   document.addEventListener('click', e => {
     document.querySelectorAll('details.owner-pick[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open'); });
+    const qe = $('#msQuickEdit');
+    if (qe && qe.style.display !== 'none' && !qe.contains(e.target) && !e.target.closest('[data-ms]')) closeMsQuickEdit();
   });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMsQuickEdit(); });
   renderTrackEditor();
   renderMsEditor();
   renderAllocEditor();
