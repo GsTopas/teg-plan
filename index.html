@@ -291,6 +291,10 @@
       <div id="depEditor"></div>
     </details>
     <details class="editor">
+      <summary><b>Personer &amp; afdelinger</b> (tilføj/redigér personer)</summary>
+      <div id="peopleEditor"></div>
+    </details>
+    <details class="editor">
       <summary><b>Seneste ændringer</b> (automatisk log — hvem, hvornår, hvad)</summary>
       <div id="changelogView"></div>
     </details>
@@ -375,7 +379,7 @@ async function loadAll() {
     sb.from('plan_dependencies').select('*'),
   ]);
   for (const r of [pe, tr, ms, al, de]) if (r.error) { toast('Kunne ikke hente data: ' + r.error.message); return; }
-  PEOPLE = pe.data.map(r => ({ id:r.id, name:r.name, role:r.role }));
+  PEOPLE = pe.data.map(r => ({ id:r.id, name:r.name, role:r.role, dept:r.department || '', sort:r.sort }));
   /* farve-slottet interpoleres i style-attributter — accepter kun kendte slots */
   TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:(/^--s-[a-z]+$/.test(r.color || '') ? r.color : '--s-gray'), from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, milestones:[] }));
   ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner, status:r.status || 'todo' }); });
@@ -427,6 +431,13 @@ const DB = {
   },
   updSubtask(s) { if (sb) dbTry(sb.from('plan_subtasks').update({ label:s.label, person_id:s.p || null, hours:s.hours, status:s.status || 'todo', done:(s.status === 'faerdig'), due_date:s.due || null }).eq('id', s.id)); },
   delSubtask(id) { if (sb) dbTry(sb.from('plan_subtasks').delete().eq('id', id)); },
+  async addPerson(p) {
+    if (!sb) return true;
+    const d = await dbTry(sb.from('plan_people').insert({ id:p.id, name:p.name, role:p.role || '', sort:p.sort, department:p.dept || '' }).select().single());
+    return !!d;
+  },
+  updPerson(p) { if (sb) dbTry(sb.from('plan_people').update({ name:p.name, role:p.role || '', department:p.dept || '' }).eq('id', p.id)); },
+  delPerson(id) { if (sb) dbTry(sb.from('plan_people').delete().eq('id', id)); },
 };
 function subscribeRealtime() {
   if (!sb) return;
@@ -447,6 +458,24 @@ const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(
 const trackById = id => TRACKS.find(t => t.id === id);
 const personById = id => PEOPLE.find(p => p.id === id);
 const personDisp = p => p.name; /* navne er entydige i plan_people */
+/* Personer grupperet pr. afdeling — bruges af alle person-vælgere */
+function peopleByDept() {
+  const m = new Map();
+  PEOPLE.forEach(p => { const d = p.dept || 'Øvrige'; if (!m.has(d)) m.set(d, []); m.get(d).push(p); });
+  return m;
+}
+function personOptions(selId, emptyLabel) {
+  return (emptyLabel != null ? `<option value="">${esc(emptyLabel)}</option>` : '') +
+    [...peopleByDept().entries()].map(([d, ps]) =>
+      `<optgroup label="${esc(d)}">` +
+      ps.map(p => `<option value="${esc(p.id)}" ${p.id === selId ? 'selected' : ''}>${esc(personDisp(p))}</option>`).join('') +
+      `</optgroup>`).join('');
+}
+function personRowsGrouped(renderRow) {
+  return [...peopleByDept().entries()].map(([d, ps]) =>
+    `<div style="font-size:10.5px;color:var(--text-muted);margin:6px 0 1px;text-transform:uppercase;letter-spacing:.4px;">${esc(d)}</div>` +
+    ps.map(renderRow).join('')).join('');
+}
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 const isDark = () => {
   const t = document.documentElement.getAttribute('data-theme');
@@ -693,7 +722,7 @@ function renderHeat() {
   let html = `<table class="heat"><thead><tr><th class="person"></th>` +
     MONTHS.map(m => `<th>${m.label}<br><span style="font-weight:400">${String(m.year).slice(2)}</span></th>`).join('') + `</tr></thead><tbody>`;
   people.forEach(p => {
-    html += `<tr><th class="person">${p.name}<span class="role">${p.role}</span></th>`;
+    html += `<tr><th class="person">${esc(p.name)}<span class="role">${esc(p.dept || p.role)}</span></th>`;
     for (let i = 0; i < 18; i++) {
       const v = loadFor(p.id, i, state.track || null);
       if (v === 0) { html += `<td style="background:transparent;color:var(--grid);border:1px dashed var(--grid);">·</td>`; continue; }
@@ -728,7 +757,7 @@ function renderHeat() {
     `<span><span class="sw" style="background:var(--status-critical)"></span>▲ &gt;100 % (overbooket)</span>`;
 
   $('#heatTable').innerHTML = `<table><thead><tr><th>Person</th>` + MONTHS.map(m=>`<th>${m.label} ${String(m.year).slice(2)}</th>`).join('') + `</tr></thead><tbody>` +
-    PEOPLE.map(p => `<tr><td>${p.name} (${p.role})</td>` + MONTHS.map((m,i)=>`<td class="num">${loadFor(p.id,i)||''}</td>`).join('') + `</tr>`).join('') + `</tbody></table>`;
+    PEOPLE.map(p => `<tr><td>${esc(p.name)}${p.dept || p.role ? ` (${esc(p.dept || p.role)})` : ''}</td>` + MONTHS.map((m,i)=>`<td class="num">${loadFor(p.id,i)||''}</td>`).join('') + `</tr>`).join('') + `</tbody></table>`;
 }
 
 /* ================== ADVARSLER ================== */
@@ -793,11 +822,11 @@ function renderMsEditor() {
   };
   const allocPick = ms => {
     const cur = msAllocs(ms);
-    const rows = PEOPLE.map(p => {
+    const rows = personRowsGrouped(p => {
       const a = cur.find(x => x.p === p.id);
       return `<label><input type="checkbox" data-mac="${ms.id}:${p.id}" ${a?'checked':''}><span>${esc(personDisp(p))}</span>
         <input type="number" min="0" max="150" step="5" value="${a?a.pct:20}" data-map="${ms.id}:${p.id}" ${a?'':'disabled'}> %</label>`;
-    }).join('');
+    });
     return `<details class="owner-pick"><summary>${allocSummary(ms)}</summary><div class="panel">${rows}</div></details>`;
   };
   /* Grupperet pr. spor: fold et spor ud for at se/redigere dets opgaver.
@@ -939,7 +968,7 @@ function renderAllocEditor() {
       ? `<span style="color:var(--text-secondary);">${MONTHS[per.from].full} – ${MONTHS[per.to].full} <span style="color:var(--text-muted);">(følger punktet)</span></span>`
       : `<select data-ae="${a.id}:from">${monthOptions(a.from)}</select> – <select data-ae="${a.id}:to">${monthOptions(a.to)}</select>`;
     html += `<tr>
-      <td><select data-ae="${a.id}:p">${PEOPLE.map(p=>`<option value="${p.id}" ${p.id===a.p?'selected':''}>${esc(personDisp(p))}</option>`).join('')}</select></td>
+      <td><select data-ae="${a.id}:p">${personOptions(a.p, null)}</select></td>
       <td><select data-ae="${a.id}:task">${taskOpts(a)}</select></td>
       <td style="white-space:nowrap;font-size:12.5px;">${perCell}</td>
       <td><input type="number" min="0" max="150" step="5" value="${a.pct}" data-ae="${a.id}:pct"></td>
@@ -1105,7 +1134,7 @@ function renderDetail() {
             ${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${(s.status || 'todo') === k ? 'selected' : ''}>${v.label}</option>`).join('')}
           </select></td>
           <td><input type="text" value="${esc(s.label)}" data-stl="${s.id}" style="width:240px;${s.done ? 'text-decoration:line-through;' : ''}"></td>
-          <td><select data-stp="${s.id}"><option value="">–</option>${PEOPLE.map(p => `<option value="${p.id}" ${p.id === s.p ? 'selected' : ''}>${esc(personDisp(p))}</option>`).join('')}</select></td>
+          <td><select data-stp="${s.id}">${personOptions(s.p, '–')}</select></td>
           <td><input type="number" min="0" step="1" value="${s.hours == null ? '' : s.hours}" data-sth="${s.id}" style="width:70px" placeholder="–"></td>
           <td><input type="date" data-stdue="${s.id}" value="${esc(s.due || '')}" style="width:135px;${late ? 'border-color:var(--status-critical);color:var(--status-critical);' : ''}" title="Valgfri: skal være færdig senest denne dato"></td>
           <td><button class="mini-btn" data-stdel="${s.id}" title="Slet delopgave">✕</button></td></tr>`;
@@ -1204,7 +1233,7 @@ function renderChangelog() {
     return;
   }
   const tblNavn = { plan_milestones:'punktet', plan_allocations:'allokeringen', plan_tracks:'sporet', plan_dependencies:'en afhængighed', plan_people:'personen', plan_subtasks:'delopgaven' };
-  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig', due_date:'senest' };
+  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig', due_date:'senest', department:'afdeling' };
   const mdr = i => (typeof i === 'number' && MONTHS[i]) ? MONTHS[i].full : i;
   const vis = (k, v) => {
     if (v == null) return '–';
@@ -1271,6 +1300,75 @@ function applyViewHash() {
   }
 }
 
+/* ================== PERSONER & AFDELINGER ================== */
+function slugifyPerson(name) {
+  const s = name.toLowerCase().replace(/[æå]/g, 'a').replace(/ø/g, 'o').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'person';
+  let id = s, n = 2;
+  while (PEOPLE.some(p => p.id === id)) id = s + '-' + (n++);
+  return id;
+}
+/* Ejer-teksterne på punkter er afledt af allokeringernes navne — genopfrisk dem,
+   når en person skifter navn eller slettes */
+function resyncOwnersFor(pid) {
+  TRACKS.forEach(t => t.milestones.forEach(ms => {
+    const al = ALLOC.filter(a => a.msId === ms.id);
+    if (al.some(a => a.p === pid)) {
+      ms.owner = al.map(a => (personById(a.p) || { name: a.p }).name).join(', ');
+      DB.updMilestone(ms);
+    }
+  }));
+}
+function renderPeopleEditor() {
+  const el = $('#peopleEditor'); if (!el) return;
+  const depts = [...new Set(PEOPLE.map(p => p.dept).filter(Boolean))];
+  let html = `<datalist id="deptList">${depts.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist>
+    <table class="edit"><thead><tr><th>Navn</th><th>Afdeling</th><th>Rolle (valgfri)</th><th></th></tr></thead><tbody>`;
+  PEOPLE.forEach(p => {
+    html += `<tr>
+      <td><input type="text" value="${esc(p.name)}" data-pe="${esc(p.id)}:name" style="width:160px"></td>
+      <td><input type="text" list="deptList" value="${esc(p.dept || '')}" data-pe="${esc(p.id)}:dept" style="width:180px" placeholder="fx Økonomi"></td>
+      <td><input type="text" value="${esc(p.role || '')}" data-pe="${esc(p.id)}:role" style="width:160px"></td>
+      <td><button class="mini-btn" data-pdel="${esc(p.id)}" title="Slet person">✕</button></td></tr>`;
+  });
+  html += `</tbody></table>
+    <div style="font-size:11.5px;color:var(--text-muted);margin:2px 0 6px;">Afdelingen bestemmer grupperingen i alle person-vælgere — skriv en ny afdeling i feltet for at oprette den.</div>
+    <button class="add-btn" id="addPersonBtn">+ Tilføj person</button>`;
+  el.innerHTML = html;
+  el.querySelectorAll('[data-pe]').forEach(inp => inp.addEventListener('change', () => {
+    const idx = inp.dataset.pe.lastIndexOf(':');
+    const id = inp.dataset.pe.slice(0, idx), f = inp.dataset.pe.slice(idx + 1);
+    const p = personById(id); if (!p) return;
+    if (f === 'name') { p.name = inp.value.trim() || 'Person'; resyncOwnersFor(p.id); }
+    else if (f === 'dept') p.dept = inp.value.trim();
+    else p.role = inp.value.trim();
+    DB.updPerson(p);
+    refresh(true);
+  }));
+  el.querySelectorAll('[data-pdel]').forEach(btn => btn.addEventListener('click', () => {
+    const p = personById(btn.dataset.pdel); if (!p) return;
+    const nAl = ALLOC.filter(a => a.p === p.id).length;
+    if (!confirm(`Slet ${p.name}?` + (nAl ? ` Personens ${nAl} allokering(er) på opgaver slettes også.` : ''))) return;
+    DB.delPerson(p.id); /* DB kaskade-sletter allokeringer; delopgaver mister blot personen */
+    PEOPLE = PEOPLE.filter(x => x !== p);
+    ALLOC = ALLOC.filter(a => a.p !== p.id);
+    SUBTASKS.forEach(s => { if (s.p === p.id) s.p = null; });
+    TRACKS.forEach(t => t.milestones.forEach(ms => {
+      if (ms.owner && ms.owner.includes(p.name)) {
+        ms.owner = ALLOC.filter(a => a.msId === ms.id).map(a => (personById(a.p) || { name: a.p }).name).join(', ');
+        DB.updMilestone(ms);
+      }
+    }));
+    refresh(true);
+  }));
+  $('#addPersonBtn').addEventListener('click', async () => {
+    const maxSort = PEOPLE.reduce((m, p) => Math.max(m, Number(p.sort) || 0), 0);
+    const p = { id: slugifyPerson('ny person'), name: 'Ny person', role: '', dept: '', sort: maxSort + 1 };
+    if (!(await DB.addPerson(p))) return;
+    PEOPLE.push(p);
+    refresh(true);
+  });
+}
+
 /* ================== HURTIG-REDIGERING FRA TIDSLINJEN ================== */
 function closeMsQuickEdit() {
   const qe = $('#msQuickEdit'); if (!qe) return;
@@ -1294,8 +1392,8 @@ function openMsQuickEdit(msId, x, y) {
     <div class="qe-row">Fra <select id="qeFrom">${monthOptions(ms.from)}</select> Deadline <select id="qeM">${monthOptions(ms.m)}</select></div>
     <div class="qe-row">Status <select id="qeStatus" style="border-color:${st.color};color:${st.color};">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${(ms.status || 'todo') === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
     <div style="font-size:11.5px;color:var(--text-muted);margin-top:9px;">Personer &amp; %</div>
-    ${PEOPLE.map(p => { const a = alFor(p.id);
-      return `<div class="qe-person"><input type="checkbox" data-qep="${p.id}" ${a ? 'checked' : ''}><span>${esc(personDisp(p))}</span><input type="number" min="0" max="150" step="5" data-qepct="${p.id}" value="${a ? a.pct : 20}" ${a ? '' : 'disabled'}> %</div>`; }).join('')}
+    ${personRowsGrouped(p => { const a = alFor(p.id);
+      return `<div class="qe-person"><input type="checkbox" data-qep="${p.id}" ${a ? 'checked' : ''}><span>${esc(personDisp(p))}</span><input type="number" min="0" max="150" step="5" data-qepct="${p.id}" value="${a ? a.pct : 20}" ${a ? '' : 'disabled'}> %</div>`; })}
     <div class="qe-row" style="margin-top:10px;">
       <a href="#detalje/${encodeURIComponent(t.id)}" id="qeDetail" style="font-size:12.5px;color:var(--s-blue);">Åbn i Spor-detalje →</a>
     </div>`;
@@ -1360,7 +1458,7 @@ function openMsQuickEdit(msId, x, y) {
 /* ================== CONTROLS, AUTH & BOOT ================== */
 function fillFilters() {
   const pf = $('#personFilter'), tf = $('#trackFilter');
-  pf.innerHTML = '<option value="">Alle</option>' + PEOPLE.map(p => `<option value="${p.id}">${esc(personDisp(p))}</option>`).join('');
+  pf.innerHTML = personOptions('', 'Alle');
   tf.innerHTML = '<option value="">Alle</option>' + TRACKS.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
   pf.value = state.person; tf.value = state.track;
 }
@@ -1393,7 +1491,7 @@ function refresh(rebuildEditors) {
   renderGantt();
   renderHeat();
   renderWarnings();
-  if (rebuildEditors) { renderTrackEditor(); renderMsEditor(); renderAllocEditor(); fillDetailTrackSel(); }
+  if (rebuildEditors) { renderTrackEditor(); renderMsEditor(); renderAllocEditor(); renderPeopleEditor(); fillDetailTrackSel(); }
   renderDepEditor(); /* status-kolonnen kan ændre sig ved alle redigeringer */
   renderChangelog();
   renderDetail(); /* altid — viser data der ændres fra andre editorer; springer selv over ved aktiv indtastning */
@@ -1409,6 +1507,7 @@ function startUI() {
   renderTrackEditor();
   renderMsEditor();
   renderAllocEditor();
+  renderPeopleEditor();
   fillDetailTrackSel();
   renderDetail();
   refresh(false);
