@@ -416,7 +416,7 @@ const DB = {
   },
   updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner, status:ms.status || 'todo' }).eq('id', ms.id)); },
   delMilestone(id) { if (sb) dbTry(sb.from('plan_milestones').delete().eq('id', id)); },
-  updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, fee_onetime:(t.feeOnce == null ? null : t.feeOnce), fee_recurring:(t.feeRec == null ? null : t.feeRec) }).eq('id', t.id)); },
+  updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, sort:(t.sort == null ? null : t.sort), fee_onetime:(t.feeOnce == null ? null : t.feeOnce), fee_recurring:(t.feeRec == null ? null : t.feeRec) }).eq('id', t.id)); },
   async addTrack(t) {
     if (!sb) return true;
     const d = await dbTry(sb.from('plan_tracks').insert({ id:t.id, name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, ongoing:t.ongoing, baseline:t.baseline, sort:t.sort }).select().single());
@@ -1012,7 +1012,7 @@ function slugifyTrack(name) {
   return id;
 }
 function renderTrackEditor() {
-  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Farve</th><th>Fra</th><th>Til</th><th>Ejer</th><th></th></tr></thead><tbody>`;
+  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Farve</th><th>Fra</th><th>Til</th><th>Ejer</th><th>Rækkefølge</th><th></th></tr></thead><tbody>`;
   visibleTracks().forEach(t => {
     html += `<tr>
       <td style="white-space:nowrap;"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(${t.color});margin-right:5px;"></span><input type="text" value="${esc(t.name)}" data-te="${t.id}:name" style="width:230px"></td>
@@ -1020,6 +1020,7 @@ function renderTrackEditor() {
       <td><select data-te="${esc(t.id)}:from">${monthOptions(t.from)}</select></td>
       <td><select data-te="${esc(t.id)}:solidTo">${monthOptions(t.solidTo)}</select></td>
       <td><input type="text" value="${esc(t.owner)}" data-te="${esc(t.id)}:owner" style="width:120px"></td>
+      <td style="white-space:nowrap;">${t.baseline ? '' : `<button class="mini-btn" data-tup="${esc(t.id)}" title="Flyt op">▲</button> <button class="mini-btn" data-tdn="${esc(t.id)}" title="Flyt ned">▼</button>`}</td>
       <td><button class="mini-btn" data-tdel="${esc(t.id)}" title="Slet spor">✕</button></td></tr>`;
   });
   html += `</tbody></table>
@@ -1039,6 +1040,21 @@ function renderTrackEditor() {
     DB.updTrack(t);
     refresh(true);
   }));
+  /* ▲▼: byt plads med nabo-sporet (kun ikke-basisdrift; basisdrift ligger altid nederst) */
+  const moveTrack = (id, dir) => {
+    const list = visibleTracks().filter(x => !x.baseline);
+    const t = trackById(id); if (!t) return;
+    const i = list.indexOf(t), j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    const before = new Map(list.map(x => [x.id, x.sort]));
+    list.forEach((x, k) => x.sort = k + 1); /* normalisér, så bytning altid er entydig */
+    t.sort = j + 1;
+    list[j].sort = i + 1;
+    list.forEach(x => { if (before.get(x.id) !== x.sort) DB.updTrack(x); });
+    refresh(true);
+  };
+  $('#trackEditor').querySelectorAll('[data-tup]').forEach(b => b.addEventListener('click', () => moveTrack(b.dataset.tup, -1)));
+  $('#trackEditor').querySelectorAll('[data-tdn]').forEach(b => b.addEventListener('click', () => moveTrack(b.dataset.tdn, 1)));
   $('#trackEditor').querySelectorAll('[data-tdel]').forEach(btn => btn.addEventListener('click', () => {
     const t = trackById(btn.dataset.tdel); if (!t) return;
     const nMs = t.milestones.length;
