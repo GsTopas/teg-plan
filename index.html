@@ -1475,13 +1475,13 @@ function renderOverblik() {
   tracks.forEach((t, r) => {
     const y = G.headH + r * ROW;
     const col = `var(${t.color})`;
-    const hasFees = t.feeOnce != null || t.feeRec != null;
-    const feeTxt = hasFees
-      ? `${t.feeOnce != null ? fmtDKK(t.feeOnce) : '–'} · ${t.feeRec != null ? fmtDKK(t.feeRec) + '/år' : '–'}`
-      : '';
+    const feeParts = [];
+    if (t.feeOnce != null) feeParts.push(`One-time: ${fmtDKK(t.feeOnce)}`);
+    if (t.feeRec != null) feeParts.push(`Recurring: ${fmtDKK(t.feeRec)}/år`);
+    const feeTxt = feeParts.join(' · ');
     html += `<div style="position:absolute;left:0;top:${y}px;width:${W}px;height:${ROW}px;border-bottom:1px solid var(--grid);">`;
     html += `<div style="position:absolute;left:0;top:7px;width:${G.labelW-16}px;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${esc(t.name)}</div>`;
-    if (feeTxt) html += `<div style="position:absolute;left:15px;top:24px;width:${G.labelW-30}px;font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(feeTxt)}</div>`;
+    if (feeTxt) html += `<div title="${esc(feeTxt)}" style="position:absolute;left:15px;top:25px;width:${G.labelW-30}px;font-size:10.5px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(feeTxt)}</div>`;
     const x1 = G.labelW + t.from * colW + 2;
     const x2solid = G.labelW + (t.solidTo + 1) * colW - 2;
     /* løbende spor tegnes helt ud til visningens kant; kun selve bjælken åbner økonomi-boksen */
