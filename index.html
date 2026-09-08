@@ -215,9 +215,20 @@
 
 
   <div class="viewtabs">
-    <button class="vt active" data-view="overblik">Overblik</button>
+    <button class="vt" data-view="overblik">Overblik</button>
+    <button class="vt active" data-view="tidslinje">Tidslinje &amp; Opgaver</button>
     <button class="vt" data-view="detalje">Spor-detalje</button>
   </div>
+
+  <section class="card" id="overviewPage" style="display:none;">
+    <div class="card-head">
+      <div>
+        <h2>Overblik</h2>
+        <p class="desc">Det store billede i kvartaler frem til Q2 2028 · ét spor pr. linje med opgaver som ◆-punkter · klik på et spor for økonomi (One-Time &amp; Recurring Fee) · klik på en ◆ for at redigere opgaven.</p>
+      </div>
+    </div>
+    <div id="ovz-outer" style="overflow-x:auto;"><div id="ovz" style="position:relative;"></div></div>
+  </section>
 
   <div class="filters view-ov">
     <label>Person
@@ -232,7 +243,7 @@
   <section class="card view-ov">
     <div class="card-head">
       <div>
-        <h2>Tidslinje &amp; milepæle</h2>
+        <h2>Tidslinje &amp; opgaver</h2>
         <p class="desc">Øverste linje pr. spor = sporets samlede periode · bjælker = opgaver med ◆ ved deadline · status: ● i gang, ✓ færdig (nedtonet), ⚠ blokeret · pile = afhængigheder (rød = konflikt, stiplet = "færdig før afslutning") · lodret linje = i dag.</p>
       </div>
     </div>
@@ -381,16 +392,19 @@ async function loadAll() {
   for (const r of [pe, tr, ms, al, de]) if (r.error) { toast('Kunne ikke hente data: ' + r.error.message); return; }
   PEOPLE = pe.data.map(r => ({ id:r.id, name:r.name, role:r.role, dept:r.department || '', sort:r.sort }));
   /* farve-slottet interpoleres i style-attributter — accepter kun kendte slots */
-  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:(/^--s-[a-z]+$/.test(r.color || '') ? r.color : '--s-gray'), from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, milestones:[] }));
+  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:(/^--s-[a-z]+$/.test(r.color || '') ? r.color : '--s-gray'), from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, feeOnce:(r.fee_onetime == null ? null : Number(r.fee_onetime)), feeRec:(r.fee_recurring == null ? null : Number(r.fee_recurring)), milestones:[] }));
   ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner, status:r.status || 'todo' }); });
   /* delopgaver er ikke kritiske — fejler tabellen, vises resten af planen alligevel */
   const st = await sb.from('plan_subtasks').select('*').order('created_at');
   SUBTASKS = st.error ? [] : st.data.map(r => ({ id:r.id, msId:r.milestone_id, label:r.label, p:r.person_id, hours:(r.hours == null ? null : Number(r.hours)), status:(r.status || (r.done ? 'faerdig' : 'todo')), done:(r.status ? r.status === 'faerdig' : r.done), due:r.due_date || null }));
-  ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct, msId:r.milestone_id || null }));
+  ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, dept:r.dept || null, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct, msId:r.milestone_id || null }));
   DEPS = de.data.map(r => ({ id:r.id, fromMs:r.from_ms, toT:r.to_track, toMs:r.to_ms, type:r.dep_type || 'start' }));
   /* ændringsloggen er ikke kritisk — fejler den, vises resten alligevel */
   const ch = await sb.from('plan_changelog').select('*').order('changed_at', { ascending: false }).limit(30);
   CHANGELOG = ch.error ? [] : ch.data;
+  /* peger filtrene på et spor, en kollega har slettet, nulstilles de i stedet for at dæmpe alt */
+  if (state.track && !trackById(state.track)) state.track = '';
+  if (state.detailTrack && !trackById(state.detailTrack)) state.detailTrack = '';
 }
 const DB = {
   async addMilestone(tid, ms) {
@@ -402,16 +416,22 @@ const DB = {
   },
   updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner, status:ms.status || 'todo' }).eq('id', ms.id)); },
   delMilestone(id) { if (sb) dbTry(sb.from('plan_milestones').delete().eq('id', id)); },
-  updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, from_m:t.from, solid_to:t.solidTo, to_m:t.to }).eq('id', t.id)); },
+  updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, fee_onetime:(t.feeOnce == null ? null : t.feeOnce), fee_recurring:(t.feeRec == null ? null : t.feeRec) }).eq('id', t.id)); },
+  async addTrack(t) {
+    if (!sb) return true;
+    const d = await dbTry(sb.from('plan_tracks').insert({ id:t.id, name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, ongoing:t.ongoing, baseline:t.baseline, sort:t.sort }).select().single());
+    return !!d;
+  },
+  delTrack(id) { if (sb) dbTry(sb.from('plan_tracks').delete().eq('id', id)); },
   async addAlloc(a) {
     if (!sb) { a.id = locId(); return true; }
     const per = allocPeriod(a);
-    const d = await dbTry(sb.from('plan_allocations').insert({ person_id:a.p, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).select().single());
+    const d = await dbTry(sb.from('plan_allocations').insert({ person_id:a.p || null, dept:a.dept || null, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).select().single());
     if (!d) return false;
     a.id = d.id;
     return true;
   },
-  updAlloc(a) { if (sb) { const per = allocPeriod(a); dbTry(sb.from('plan_allocations').update({ person_id:a.p, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).eq('id', a.id)); } },
+  updAlloc(a) { if (sb) { const per = allocPeriod(a); dbTry(sb.from('plan_allocations').update({ person_id:a.p || null, dept:a.dept || null, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).eq('id', a.id)); } },
   delAlloc(id) { if (sb) dbTry(sb.from('plan_allocations').delete().eq('id', id)); },
   async addDep(d0) {
     if (!sb) { d0.id = locId(); return true; }
@@ -458,6 +478,19 @@ const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(
 const trackById = id => TRACKS.find(t => t.id === id);
 const personById = id => PEOPLE.find(p => p.id === id);
 const personDisp = p => p.name; /* navne er entydige i plan_people */
+/* En allokering peger på en person ELLER en hel afdeling */
+const allocName = a => a.dept ? a.dept : allocName(a);
+function deptAllocNames() { return [...new Set(ALLOC.filter(a => a.dept).map(a => a.dept))]; }
+function deptLoadFor(dept, monthIdx, trackId) {
+  let sum = 0;
+  for (const a of ALLOC) {
+    if (a.dept !== dept) continue;
+    if (trackId && a.t !== trackId) continue;
+    const per = allocPeriod(a);
+    if (monthIdx >= per.from && monthIdx <= per.to) sum += Number(a.pct) || 0;
+  }
+  return sum;
+}
 /* Personer grupperet pr. afdeling — bruges af alle person-vælgere */
 function peopleByDept() {
   const m = new Map();
@@ -471,12 +504,15 @@ function personOptions(selId, emptyLabel) {
       ps.map(p => `<option value="${esc(p.id)}" ${p.id === selId ? 'selected' : ''}>${esc(personDisp(p))}</option>`).join('') +
       `</optgroup>`).join('');
 }
-function personRowsGrouped(renderRow) {
+function personRowsGrouped(renderRow, renderDeptRow) {
   return [...peopleByDept().entries()].map(([d, ps]) =>
-    `<div style="font-size:10.5px;color:var(--text-muted);margin:6px 0 1px;text-transform:uppercase;letter-spacing:.4px;">${esc(d)}</div>` +
+    (renderDeptRow
+      ? renderDeptRow(d)
+      : `<div style="font-size:10.5px;color:var(--text-muted);margin:6px 0 1px;text-transform:uppercase;letter-spacing:.4px;">${esc(d)}</div>`) +
     ps.map(renderRow).join('')).join('');
 }
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+const fmtDKK = n => n == null ? '–' : Number(n).toLocaleString('da-DK') + ' kr';
 const isDark = () => {
   const t = document.documentElement.getAttribute('data-theme');
   if (t) return t === 'dark';
@@ -639,7 +675,7 @@ function renderGantt() {
         const mx = G.labelW + (ms.m + 0.5) * colW;
         msY[ms.id] = y + rowY + 21;
         const msAl = ALLOC.filter(a => a.msId === ms.id);
-        const who = msAl.length ? msAl.map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ') : (ms.owner || '');
+        const who = msAl.length ? msAl.map(a => `${allocName(a)} ${a.pct}%`).join(', ') : (ms.owner || '');
         const stIcon = ms.status === 'faerdig' ? '<span style="color:var(--status-good);">✓</span> '
                      : ms.status === 'blokeret' ? '<span style="color:var(--status-critical);">⚠</span> '
                      : ms.status === 'igang' ? '<span style="color:var(--s-blue);">●</span> ' : '';
@@ -695,7 +731,7 @@ function renderGantt() {
     const depsOut = DEPS.filter(d => d.fromMs === ms.id);
     const msAl = ALLOC.filter(a => a.msId === ms.id);
     const persons = msAl.length
-      ? msAl.map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ')
+      ? msAl.map(a => `${allocName(a)} ${a.pct}%`).join(', ')
       : (ms.owner || t.owner);
     const html2 = `<div class="tt-title">◆ ${esc(ms.label)}</div>
       <div class="tt-row"><span>Spor</span><b>${esc(t.name)}</b></div>
@@ -732,6 +768,18 @@ function renderHeat() {
     }
     html += `</tr>`;
   });
+  /* afdelings-allokeringer får egne rækker — kapacitetsgrænsen for en hel afdeling
+     kendes ikke, så de markeres kun visuelt, ikke som overbookede advarsler */
+  if (!state.person) deptAllocNames().forEach(d => {
+    html += `<tr><th class="person">${esc(d)}<span class="role">afdeling</span></th>`;
+    for (let i = 0; i < 18; i++) {
+      const v = deptLoadFor(d, i, state.track || null);
+      if (v === 0) { html += `<td style="background:transparent;color:var(--grid);border:1px dashed var(--grid);">·</td>`; continue; }
+      const c = heatColor(v);
+      html += `<td style="background:${c.bg};color:${c.fg};">${v}</td>`;
+    }
+    html += `</tr>`;
+  });
   html += `</tbody></table>`;
   $('#heat-outer').innerHTML = html;
 
@@ -757,7 +805,8 @@ function renderHeat() {
     `<span><span class="sw" style="background:var(--status-critical)"></span>▲ &gt;100 % (overbooket)</span>`;
 
   $('#heatTable').innerHTML = `<table><thead><tr><th>Person</th>` + MONTHS.map(m=>`<th>${m.label} ${String(m.year).slice(2)}</th>`).join('') + `</tr></thead><tbody>` +
-    PEOPLE.map(p => `<tr><td>${esc(p.name)}${p.dept || p.role ? ` (${esc(p.dept || p.role)})` : ''}</td>` + MONTHS.map((m,i)=>`<td class="num">${loadFor(p.id,i)||''}</td>`).join('') + `</tr>`).join('') + `</tbody></table>`;
+    PEOPLE.map(p => `<tr><td>${esc(p.name)}${p.dept || p.role ? ` (${esc(p.dept || p.role)})` : ''}</td>` + MONTHS.map((m,i)=>`<td class="num">${loadFor(p.id,i)||''}</td>`).join('') + `</tr>`).join('') +
+    deptAllocNames().map(d => `<tr><td>${esc(d)} (afdeling)</td>` + MONTHS.map((m,i)=>`<td class="num">${deptLoadFor(d,i)||''}</td>`).join('') + `</tr>`).join('') + `</tbody></table>`;
 }
 
 /* ================== ADVARSLER ================== */
@@ -817,7 +866,7 @@ function renderMsEditor() {
   const msAllocs = ms => ALLOC.filter(a => a.msId === ms.id);
   const allocSummary = ms => {
     const cur = msAllocs(ms);
-    if (cur.length) return cur.map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ');
+    if (cur.length) return cur.map(a => `${allocName(a)} ${a.pct}%`).join(', ');
     return ms.owner ? esc(ms.owner) + ' (uden %)' : '– (ingen endnu)';
   };
   const allocPick = ms => {
@@ -826,6 +875,11 @@ function renderMsEditor() {
       const a = cur.find(x => x.p === p.id);
       return `<label><input type="checkbox" data-mac="${ms.id}:${p.id}" ${a?'checked':''}><span>${esc(personDisp(p))}</span>
         <input type="number" min="0" max="150" step="5" value="${a?a.pct:20}" data-map="${ms.id}:${p.id}" ${a?'':'disabled'}> %</label>`;
+    }, d => {
+      /* afdelings-overskriften er selv valgbar: allokér hele afdelingen med én procent */
+      const a = cur.find(x => x.dept === d);
+      return `<label style="font-size:10.5px;color:var(--text-muted);margin:6px 0 1px;text-transform:uppercase;letter-spacing:.4px;"><input type="checkbox" data-macd="${ms.id}:${esc(d)}" ${a?'checked':''}><span>${esc(d)}</span>
+        <input type="number" min="0" max="300" step="5" value="${a?a.pct:20}" data-mapd="${ms.id}:${esc(d)}" ${a?'':'disabled'}> %</label>`;
     });
     return `<details class="owner-pick"><summary>${allocSummary(ms)}</summary><div class="panel">${rows}</div></details>`;
   };
@@ -865,13 +919,13 @@ function renderMsEditor() {
     refresh(true);
   }));
   const syncMsOwner = ms => {
-    ms.owner = msAllocs(ms).map(a => (personById(a.p)||{name:a.p}).name).join(', ');
+    ms.owner = msAllocs(ms).map(a => allocName(a)).join(', ');
     DB.updMilestone(ms);
   };
   /* opdater kun summary-teksten efter valg — fuld genopbygning ville lukke popup'en */
   const updSummary = (el, ms) => {
     el.closest('details.owner-pick').querySelector('summary').textContent =
-      msAllocs(ms).length ? msAllocs(ms).map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ') : '– (ingen endnu)';
+      msAllocs(ms).length ? msAllocs(ms).map(a => `${allocName(a)} ${a.pct}%`).join(', ') : '– (ingen endnu)';
   };
   $('#msEditor').querySelectorAll('[data-mac]').forEach(cb => cb.addEventListener('change', async () => {
     const [msId, pid] = cb.dataset.mac.split(':');
@@ -901,6 +955,36 @@ function renderMsEditor() {
     if (found) { syncMsOwner(found.ms); updSummary(inp, found.ms); }
     refresh(false);
   }));
+  $('#msEditor').querySelectorAll('[data-macd]').forEach(cb => cb.addEventListener('change', async () => {
+    const v = cb.dataset.macd, ci = v.indexOf(':');
+    const msId = v.slice(0, ci), d = v.slice(ci + 1); /* afdelingsnavne kan indeholde ':' — split ved FØRSTE kolon */
+    const found = findMs(msId); if (!found) return;
+    const ms = found.ms;
+    const pctInput = [...$('#msEditor').querySelectorAll('[data-mapd]')].find(x => x.dataset.mapd === v);
+    if (cb.checked) {
+      const a = { p: null, dept: d, t: found.t.id, msId: msId, from: ms.from, to: ms.m, pct: Number(pctInput && pctInput.value) || 20 };
+      if (!(await DB.addAlloc(a))) { cb.checked = false; return; }
+      ALLOC.push(a);
+      if (pctInput) pctInput.disabled = false;
+    } else {
+      const a = ALLOC.find(x => x.msId === msId && x.dept === d);
+      if (a) { DB.delAlloc(a.id); ALLOC = ALLOC.filter(x => x !== a); }
+      if (pctInput) pctInput.disabled = true;
+    }
+    syncMsOwner(ms);
+    updSummary(cb, ms);
+    refresh(false);
+  }));
+  $('#msEditor').querySelectorAll('[data-mapd]').forEach(inp => inp.addEventListener('change', () => {
+    const v = inp.dataset.mapd, ci = v.indexOf(':');
+    const msId = v.slice(0, ci), d = v.slice(ci + 1);
+    const a = ALLOC.find(x => x.msId === msId && x.dept === d); if (!a) return;
+    a.pct = Number(inp.value) || 0;
+    DB.updAlloc(a);
+    const found = findMs(msId);
+    if (found) { syncMsOwner(found.ms); updSummary(inp, found.ms); }
+    refresh(false);
+  }));
   $('#msEditor').querySelectorAll('[data-mdel]').forEach(el => el.addEventListener('click', () => {
     const id = el.dataset.mdel;
     const found = findMs(id); if (!found) return;
@@ -919,16 +1003,26 @@ function renderMsEditor() {
     refresh(true);
   }));
 }
+function slugifyTrack(name) {
+  const s = name.toLowerCase().replace(/[æå]/g, 'a').replace(/ø/g, 'o').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'spor';
+  let id = s, n = 2;
+  while (trackById(id)) id = s + '-' + (n++);
+  return id;
+}
 function renderTrackEditor() {
-  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Fra</th><th>Til</th><th>Ejer</th></tr></thead><tbody>`;
+  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Farve</th><th>Fra</th><th>Til</th><th>Ejer</th><th></th></tr></thead><tbody>`;
   visibleTracks().forEach(t => {
     html += `<tr>
       <td style="white-space:nowrap;"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(${t.color});margin-right:5px;"></span><input type="text" value="${esc(t.name)}" data-te="${t.id}:name" style="width:230px"></td>
-      <td><select data-te="${t.id}:from">${monthOptions(t.from)}</select></td>
-      <td><select data-te="${t.id}:solidTo">${monthOptions(t.solidTo)}</select></td>
-      <td><input type="text" value="${esc(t.owner)}" data-te="${t.id}:owner" style="width:120px"></td></tr>`;
+      <td><select data-te="${esc(t.id)}:color">${COLOR_SLOTS.map(([c, lbl]) => `<option value="${c}" ${t.color === c ? 'selected' : ''}>${lbl}</option>`).join('')}</select></td>
+      <td><select data-te="${esc(t.id)}:from">${monthOptions(t.from)}</select></td>
+      <td><select data-te="${esc(t.id)}:solidTo">${monthOptions(t.solidTo)}</select></td>
+      <td><input type="text" value="${esc(t.owner)}" data-te="${esc(t.id)}:owner" style="width:120px"></td>
+      <td><button class="mini-btn" data-tdel="${esc(t.id)}" title="Slet spor">✕</button></td></tr>`;
   });
-  html += `</tbody></table><div style="font-size:11.5px;color:var(--text-muted);margin-top:4px;">Nye spor, farver og rækkefølge oprettes/ændres i Supabase Table Editor (tabellen plan_tracks).</div>`;
+  html += `</tbody></table>
+    <div style="font-size:11.5px;color:var(--text-muted);margin:2px 0 6px;">Løbende/basisdrift-flag og rækkefølge ændres stadig i Supabase Table Editor (plan_tracks).</div>
+    <button class="add-btn" id="addTrackBtn">+ Tilføj spor</button>`;
   $('#trackEditor').innerHTML = html;
   $('#trackEditor').querySelectorAll('[data-te]').forEach(el => el.addEventListener('change', () => {
     const idx = el.dataset.te.lastIndexOf(':');
@@ -936,12 +1030,40 @@ function renderTrackEditor() {
     const t = trackById(id); if (!t) return;
     if (f === 'from') { t.from = Number(el.value); if (t.from > t.solidTo) t.solidTo = t.from; }
     else if (f === 'solidTo') { t.solidTo = Number(el.value); if (t.solidTo < t.from) t.from = t.solidTo; }
+    else if (f === 'color') { if (COLOR_SLOTS.some(([c]) => c === el.value)) t.color = el.value; }
     else t[f] = el.value;
     /* løbende spor vises horisonten ud; afsluttede spor slutter ved 'Til' */
     t.to = t.ongoing ? Math.max(t.to, t.solidTo) : t.solidTo;
     DB.updTrack(t);
     refresh(true);
   }));
+  $('#trackEditor').querySelectorAll('[data-tdel]').forEach(btn => btn.addEventListener('click', () => {
+    const t = trackById(btn.dataset.tdel); if (!t) return;
+    const nMs = t.milestones.length;
+    if (!confirm(`Slet sporet "${t.name}"?` + (nMs ? ` Alle dets ${nMs} opgaver med delopgaver og allokeringer slettes også.` : ''))) return;
+    const msIds = new Set(t.milestones.map(m => m.id));
+    DB.delTrack(t.id); /* DB kaskade-sletter opgaver, delopgaver, allokeringer og afhængigheder */
+    TRACKS = TRACKS.filter(x => x !== t);
+    ALLOC = ALLOC.filter(a => a.t !== t.id && !msIds.has(a.msId));
+    SUBTASKS = SUBTASKS.filter(s => !msIds.has(s.msId));
+    DEPS = DEPS.filter(d => d.toT !== t.id && !msIds.has(d.fromMs) && !msIds.has(d.toMs));
+    if (state.detailTrack === t.id) state.detailTrack = '';
+    if (state.track === t.id) state.track = '';
+    openMsGroups.delete(t.id);
+    fillFilters();
+    refresh(true);
+  }));
+  $('#addTrackBtn').addEventListener('click', async () => {
+    const used = new Set(TRACKS.map(x => x.color));
+    const free = COLOR_SLOTS.find(([c]) => c !== '--s-gray' && !used.has(c));
+    const maxSort = TRACKS.reduce((m, x) => Math.max(m, Number(x.sort) || 0), 0);
+    const t = { id: slugifyTrack('nyt spor'), name: 'Nyt spor', owner: '', color: (free ? free[0] : '--s-blue'),
+                from: 0, solidTo: 17, to: 17, ongoing: false, baseline: false, sort: maxSort + 1, milestones: [] };
+    if (!(await DB.addTrack(t))) return;
+    TRACKS.push(t);
+    fillFilters();
+    refresh(true);
+  });
 }
 function renderAllocEditor() {
   /* Viser kun løbende/fri rækker (uden punkt) — punkt-allokeringer styres i punkt-editoren.
@@ -968,7 +1090,7 @@ function renderAllocEditor() {
       ? `<span style="color:var(--text-secondary);">${MONTHS[per.from].full} – ${MONTHS[per.to].full} <span style="color:var(--text-muted);">(følger punktet)</span></span>`
       : `<select data-ae="${a.id}:from">${monthOptions(a.from)}</select> – <select data-ae="${a.id}:to">${monthOptions(a.to)}</select>`;
     html += `<tr>
-      <td><select data-ae="${a.id}:p">${personOptions(a.p, null)}</select></td>
+      <td>${a.dept ? `<span style="font-size:12.5px;">${esc(a.dept)} <span style="color:var(--text-muted);">(afdeling)</span></span>` : `<select data-ae="${a.id}:p">${personOptions(a.p, null)}</select>`}</td>
       <td><select data-ae="${a.id}:task">${taskOpts(a)}</select></td>
       <td style="white-space:nowrap;font-size:12.5px;">${perCell}</td>
       <td><input type="number" min="0" max="150" step="5" value="${a.pct}" data-ae="${a.id}:pct"></td>
@@ -1071,6 +1193,11 @@ function renderDepEditor() {
 }
 
 /* ================== SPOR-DETALJE ================== */
+/* Faste farve-slots (colorblind-safe i begge temaer) — grå er reserveret basisdrift */
+const COLOR_SLOTS = [
+  ['--s-blue', 'Blå'], ['--s-aqua', 'Søgrøn'], ['--s-yellow', 'Gul'], ['--s-green', 'Grøn'],
+  ['--s-violet', 'Violet'], ['--s-red', 'Rød'], ['--s-magenta', 'Magenta'], ['--s-orange', 'Orange'], ['--s-gray', 'Grå'],
+];
 const STATUS = {
   todo:     { label:'Ikke startet', color:'var(--text-muted)' },
   igang:    { label:'I gang',       color:'var(--s-blue)' },
@@ -1114,7 +1241,7 @@ function renderDetail() {
   t.milestones.slice().sort((a, b) => (a.from - b.from) || (a.m - b.m)).forEach(ms => {
     const subs = msSubtasks(ms);
     const st = STATUS[ms.status] || STATUS.todo;
-    const who = ALLOC.filter(a => a.msId === ms.id).map(a => `${(personById(a.p)||{name:a.p}).name} ${a.pct}%`).join(', ');
+    const who = ALLOC.filter(a => a.msId === ms.id).map(a => `${allocName(a)} ${a.pct}%`).join(', ');
     html += `<div style="border:1px solid var(--grid);border-radius:8px;margin:7px 0;">
       <div style="display:flex;align-items:center;gap:9px;padding:8px 11px;flex-wrap:wrap;">
         <span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};"></span>
@@ -1144,7 +1271,8 @@ function renderDetail() {
       </div>
     </div>`;
   });
-  if (!t.milestones.length) html = '<div style="font-size:12.5px;color:var(--text-muted);padding:4px 2px;">Sporet har ingen opgaver endnu – opret dem i punkt-editoren under Redigér data.</div>';
+  if (!t.milestones.length) html = '<div style="font-size:12.5px;color:var(--text-muted);padding:4px 2px;">Sporet har ingen opgaver endnu.</div>';
+  html += `<button class="add-btn" id="detailAddMs" style="margin-top:6px;">+ Tilføj opgave på sporet</button>`;
   box.innerHTML = html;
   /* Håndteringen opdaterer småting direkte i DOM'en og kalder refresh(false) —
      fuld genopbygning ville smide brugerens fokus væk midt i arbejdet.
@@ -1223,6 +1351,13 @@ function renderDetail() {
     SUBTASKS.push(s);
     refresh(false);
   }));
+  const addBtn = box.querySelector('#detailAddMs');
+  if (addBtn) addBtn.addEventListener('click', async () => {
+    const ms = { m: t.from, from: t.from, label: 'Ny opgave', owner: '', status: 'todo' };
+    if (!(await DB.addMilestone(t.id, ms))) return;
+    t.milestones.push(ms);
+    refresh(true);
+  });
 }
 
 /* ================== ÆNDRINGSLOG ================== */
@@ -1233,7 +1368,7 @@ function renderChangelog() {
     return;
   }
   const tblNavn = { plan_milestones:'punktet', plan_allocations:'allokeringen', plan_tracks:'sporet', plan_dependencies:'en afhængighed', plan_people:'personen', plan_subtasks:'delopgaven' };
-  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig', due_date:'senest', department:'afdeling' };
+  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig', due_date:'senest', department:'afdeling', fee_onetime:'one-time fee', fee_recurring:'recurring fee' };
   const mdr = i => (typeof i === 'number' && MONTHS[i]) ? MONTHS[i].full : i;
   const vis = (k, v) => {
     if (v == null) return '–';
@@ -1250,7 +1385,8 @@ function renderChangelog() {
       const dta = c.new_data || c.old_data || {};
       const p = personById(dta.person_id);
       const f = dta.milestone_id ? findMs(dta.milestone_id) : null;
-      nm = `${p ? p.name : dta.person_id} ${dta.pct}%${f ? ' på ' + f.ms.label : (dta.track_id ? ' på ' + dta.track_id : '')}`;
+      const who = dta.dept ? dta.dept + ' (afdeling)' : (p ? p.name : dta.person_id);
+      nm = `${who} ${dta.pct}%${f ? ' på ' + f.ms.label : (dta.track_id ? ' på ' + dta.track_id : '')}`;
     }
     let detail = '';
     if (c.action === 'UPDATE' && c.old_data && c.new_data) {
@@ -1264,11 +1400,122 @@ function renderChangelog() {
   }).join('') + `<div style="font-size:11px;color:var(--text-muted);padding:6px 2px;">Viser de seneste ${CHANGELOG.length} ændringer — hele historikken ligger i databasen (plan_changelog).</div>`;
 }
 
-/* ================== VISNINGER (Overblik / Spor-detalje) ================== */
+/* ================== OVERBLIK (zoomet ud: kun spor, kvartaler til Q2 2028) ================== */
+function renderOverblik() {
+  const cont = $('#ovz'); if (!cont) return;
+  const outerW = $('#ovz-outer').clientWidth;
+  const W = Math.max(outerW, 980);
+  const plotW = W - G.labelW;
+  const MCOUNT = 24; /* jul 2026 – jun 2028 = t.o.m. Q2 2028 */
+  const colW = plotW / MCOUNT;
+  const ROW = 46;
+  const tracks = visibleTracks();
+  const H = G.headH + tracks.length * ROW + 36;
+  cont.style.width = W + 'px';
+  cont.style.height = H + 'px';
+  const qLabels = [];
+  { let y = 2026, q = 3; for (let i = 0; i < 8; i++) { qLabels.push('Q' + q + ' ' + y); q++; if (q > 4) { q = 1; y++; } } }
+  let html = '';
+  qLabels.forEach((lbl, i) => {
+    html += `<div style="position:absolute;left:${G.labelW + i*3*colW}px;top:8px;width:${3*colW}px;font-size:11.5px;color:var(--text-muted);text-align:center;">${lbl}</div>`;
+  });
+  for (let i = 0; i <= 8; i++) {
+    html += `<div style="position:absolute;left:${G.labelW + i*3*colW}px;top:${G.headH-8}px;bottom:30px;width:1px;background:var(--grid);"></div>`;
+  }
+  const now = new Date();
+  const rawToday = (now.getFullYear() - 2026) * 12 + now.getMonth() - 6 + (now.getDate() - 1) / 30;
+  const tx = G.labelW + Math.min(MCOUNT, Math.max(0, rawToday)) * colW;
+  html += `<div style="position:absolute;left:${tx}px;top:${G.headH-8}px;height:${H - G.headH - 24}px;width:2px;background:var(--text-muted);opacity:.6;"></div>
+           <div style="position:absolute;left:${tx-13}px;top:${H-24}px;font-size:10px;color:var(--text-muted);">i dag</div>`;
+  tracks.forEach((t, r) => {
+    const y = G.headH + r * ROW;
+    const col = `var(${t.color})`;
+    const hasFees = t.feeOnce != null || t.feeRec != null;
+    const feeTxt = hasFees
+      ? `${t.feeOnce != null ? fmtDKK(t.feeOnce) : '–'} · ${t.feeRec != null ? fmtDKK(t.feeRec) + '/md' : '–'}`
+      : 'klik for økonomi';
+    html += `<div data-ovt="${esc(t.id)}" style="position:absolute;left:0;top:${y}px;width:${W}px;height:${ROW}px;border-bottom:1px solid var(--grid);cursor:pointer;" title="Klik: One-Time & Recurring Fee">`;
+    html += `<div style="position:absolute;left:0;top:7px;width:${G.labelW-16}px;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${esc(t.name)}</div>`;
+    html += `<div style="position:absolute;left:15px;top:24px;width:${G.labelW-30}px;font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(feeTxt)}</div>`;
+    const x1 = G.labelW + t.from * colW + 2;
+    const x2solid = G.labelW + (t.solidTo + 1) * colW - 2;
+    /* løbende spor tegnes helt ud til visningens kant */
+    const xEnd = t.ongoing ? G.labelW + MCOUNT * colW - 2 : G.labelW + (t.to + 1) * colW - 2;
+    if (t.baseline) {
+      html += `<div style="position:absolute;left:${x1}px;top:20px;width:${xEnd-x1}px;height:6px;border-radius:3px;background:${col};opacity:.45;"></div>`;
+    } else {
+      html += `<div style="position:absolute;left:${x1}px;top:17px;width:${x2solid-x1}px;height:12px;border-radius:6px;background:${col};"></div>`;
+      if (xEnd > x2solid + 2) {
+        html += `<div style="position:absolute;left:${x2solid+2}px;top:20px;width:${xEnd-x2solid-2}px;height:6px;border-radius:3px;background:${col};opacity:.30;"></div>`;
+      }
+      t.milestones.forEach(ms => {
+        const mx = G.labelW + (ms.m + 0.5) * colW;
+        html += `<div data-ovms="${esc(ms.id)}" tabindex="0" style="position:absolute;left:${mx-4.5}px;top:${18.5}px;width:9px;height:9px;background:${col};transform:rotate(45deg);border:1.5px solid var(--surface-1);border-radius:1.5px;cursor:pointer;${ms.status === 'faerdig' ? 'opacity:.55;' : ''}"></div>`;
+      });
+    }
+    html += `</div>`;
+  });
+  if (!tracks.length) {
+    html += `<div style="position:absolute;left:${G.labelW}px;top:${G.headH + 10}px;font-size:12.5px;color:var(--text-muted);">Ingen spor endnu – opret det første under Redigér data → Spor (projekter).</div>`;
+  }
+  const sumOnce = TRACKS.reduce((s, t) => s + (t.feeOnce || 0), 0);
+  const sumRec = TRACKS.reduce((s, t) => s + (t.feeRec || 0), 0);
+  html += `<div style="position:absolute;left:0;top:${H-22}px;font-size:12px;color:var(--text-secondary);"><b>Samlet:</b> ${fmtDKK(sumOnce)} one-time · ${fmtDKK(sumRec)}/md recurring</div>`;
+  cont.innerHTML = html;
+  cont.querySelectorAll('[data-ovms]').forEach(el => {
+    const f = findMs(el.dataset.ovms); if (!f) return;
+    const tt = `<div class="tt-title">◆ ${esc(f.ms.label)}</div>
+      <div class="tt-row"><span>Periode</span><b>${f.ms.from < f.ms.m ? MONTHS[f.ms.from].full + ' – ' + MONTHS[f.ms.m].full : MONTHS[f.ms.m].full}</b></div>
+      <div class="tt-row"><span>Status</span><b style="color:${(STATUS[f.ms.status] || STATUS.todo).color};">${(STATUS[f.ms.status] || STATUS.todo).label}</b></div>`;
+    el.addEventListener('mousemove', e => showTT(tt, e.clientX, e.clientY));
+    el.addEventListener('mouseleave', hideTT);
+    el.addEventListener('focus', () => { const r = el.getBoundingClientRect(); showTT(tt, r.left, r.bottom); });
+    el.addEventListener('blur', hideTT);
+    el.addEventListener('click', e => { e.stopPropagation(); hideTT(); openMsQuickEdit(f.ms.id, e.clientX, e.clientY); });
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') { hideTT(); const r = el.getBoundingClientRect(); openMsQuickEdit(f.ms.id, r.left, r.bottom + 6); } });
+  });
+  cont.querySelectorAll('[data-ovt]').forEach(el => el.addEventListener('click', e => {
+    e.stopPropagation();
+    openFeeEdit(el.dataset.ovt, e.clientX, e.clientY);
+  }));
+}
+function openFeeEdit(tid, x, y) {
+  const t = trackById(tid); if (!t) return;
+  const qe = $('#msQuickEdit');
+  qe.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(${t.color});"></span>
+      <b style="font-size:13px;flex:1;">${esc(t.name)}</b>
+      <button class="mini-btn" id="qeClose" title="Luk">✕</button>
+    </div>
+    <div class="qe-row">One-Time Fee <input type="number" id="qeFeeOnce" min="0" step="1000" value="${t.feeOnce == null ? '' : t.feeOnce}" placeholder="–" style="width:110px;margin-left:auto;"> kr</div>
+    <div class="qe-row">Recurring Fee <input type="number" id="qeFeeRec" min="0" step="500" value="${t.feeRec == null ? '' : t.feeRec}" placeholder="–" style="width:110px;margin-left:auto;"> kr/md</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Gemmes med det samme. Tomt felt = ikke angivet.</div>`;
+  qe.style.display = 'block';
+  delete qe.dataset.ms;
+  qe.dataset.track = tid; /* så refresh-guarden kan lukke popup'en, hvis sporet slettes */
+  const r = qe.getBoundingClientRect();
+  qe.style.left = Math.max(8, Math.min(x + 10, innerWidth - r.width - 12)) + 'px';
+  qe.style.top = Math.max(8, Math.min(y + 12, innerHeight - r.height - 12)) + 'px';
+  $('#qeClose').addEventListener('click', closeMsQuickEdit);
+  const readFee = el => {
+    let v = el.value === '' ? null : Number(el.value);
+    if (v != null && !isFinite(v)) v = null;
+    if (v != null) v = Math.round(Math.min(100000000, Math.max(0, v)));
+    el.value = v == null ? '' : v;
+    return v;
+  };
+  /* friskt opslag ved hvert gem — closure-objektet kan være udskiftet af en realtime-reload */
+  $('#qeFeeOnce').addEventListener('change', e => { const tt = trackById(tid); if (!tt) return; tt.feeOnce = readFee(e.target); DB.updTrack(tt); renderOverblik(); });
+  $('#qeFeeRec').addEventListener('change', e => { const tt = trackById(tid); if (!tt) return; tt.feeRec = readFee(e.target); DB.updTrack(tt); renderOverblik(); });
+}
+
+/* ================== VISNINGER (Overblik / Tidslinje / Spor-detalje) ================== */
 function setView(v) {
-  state.view = v === 'detalje' ? 'detalje' : 'overblik';
-  document.querySelectorAll('.view-ov').forEach(el => el.style.display = state.view === 'overblik' ? '' : 'none');
+  state.view = v === 'detalje' ? 'detalje' : v === 'overblik' ? 'overblik' : 'tidslinje';
+  document.querySelectorAll('.view-ov').forEach(el => el.style.display = state.view === 'tidslinje' ? '' : 'none');
   const dp = $('#detailPage'); if (dp) dp.style.display = state.view === 'detalje' ? '' : 'none';
+  const op = $('#overviewPage'); if (op) op.style.display = state.view === 'overblik' ? '' : 'none';
   document.querySelectorAll('.viewtabs .vt').forEach(b => b.classList.toggle('active', b.dataset.view === state.view));
   if (state.view === 'detalje') {
     if (!trackById(state.detailTrack)) {
@@ -1277,15 +1524,18 @@ function setView(v) {
       fillDetailTrackSel();
     }
     renderDetail();
+  } else if (state.view === 'overblik') {
+    renderOverblik(); /* re-render med korrekt bredde efter at have været skjult */
   } else {
     refresh(false); /* gantt-bredden skal genberegnes efter at have været skjult */
   }
   updateViewHash();
 }
-/* URL-hash gør visningen link-bar (#detalje/nezasa) uden at spamme historikken */
+/* URL-hash gør visningen link-bar (#overblik, #detalje/nezasa) uden at spamme historikken */
 function updateViewHash() {
   const h = state.view === 'detalje'
     ? '#detalje' + (state.detailTrack ? '/' + encodeURIComponent(state.detailTrack) : '')
+    : state.view === 'overblik' ? '#overblik'
     : location.pathname + location.search;
   history.replaceState(null, '', h);
 }
@@ -1295,8 +1545,10 @@ function applyViewHash() {
     const tid = m[1] ? decodeURIComponent(m[1]) : '';
     if (tid && trackById(tid)) { state.detailTrack = tid; fillDetailTrackSel(); }
     setView('detalje');
-  } else {
+  } else if (location.hash === '#overblik') {
     setView('overblik');
+  } else {
+    setView('tidslinje');
   }
 }
 
@@ -1313,7 +1565,7 @@ function resyncOwnersFor(pid) {
   TRACKS.forEach(t => t.milestones.forEach(ms => {
     const al = ALLOC.filter(a => a.msId === ms.id);
     if (al.some(a => a.p === pid)) {
-      ms.owner = al.map(a => (personById(a.p) || { name: a.p }).name).join(', ');
+      ms.owner = al.map(a => allocName(a)).join(', ');
       DB.updMilestone(ms);
     }
   }));
@@ -1354,7 +1606,7 @@ function renderPeopleEditor() {
     SUBTASKS.forEach(s => { if (s.p === p.id) s.p = null; });
     TRACKS.forEach(t => t.milestones.forEach(ms => {
       if (ms.owner && ms.owner.includes(p.name)) {
-        ms.owner = ALLOC.filter(a => a.msId === ms.id).map(a => (personById(a.p) || { name: a.p }).name).join(', ');
+        ms.owner = ALLOC.filter(a => a.msId === ms.id).map(a => allocName(a)).join(', ');
         DB.updMilestone(ms);
       }
     }));
@@ -1375,6 +1627,7 @@ function closeMsQuickEdit() {
   qe.style.display = 'none';
   qe.innerHTML = '';
   delete qe.dataset.ms;
+  delete qe.dataset.track;
 }
 function openMsQuickEdit(msId, x, y) {
   const found = findMs(msId); if (!found) return;
@@ -1393,57 +1646,97 @@ function openMsQuickEdit(msId, x, y) {
     <div class="qe-row">Status <select id="qeStatus" style="border-color:${st.color};color:${st.color};">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${(ms.status || 'todo') === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
     <div style="font-size:11.5px;color:var(--text-muted);margin-top:9px;">Personer &amp; %</div>
     ${personRowsGrouped(p => { const a = alFor(p.id);
-      return `<div class="qe-person"><input type="checkbox" data-qep="${p.id}" ${a ? 'checked' : ''}><span>${esc(personDisp(p))}</span><input type="number" min="0" max="150" step="5" data-qepct="${p.id}" value="${a ? a.pct : 20}" ${a ? '' : 'disabled'}> %</div>`; })}
+      return `<div class="qe-person"><input type="checkbox" data-qep="${p.id}" ${a ? 'checked' : ''}><span>${esc(personDisp(p))}</span><input type="number" min="0" max="150" step="5" data-qepct="${p.id}" value="${a ? a.pct : 20}" ${a ? '' : 'disabled'}> %</div>`; },
+    d => { const a = ALLOC.find(x => x.msId === ms.id && x.dept === d);
+      return `<div class="qe-person" style="font-size:10.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-top:5px;"><input type="checkbox" data-qepd="${esc(d)}" ${a ? 'checked' : ''}><span>${esc(d)}</span><input type="number" min="0" max="300" step="5" data-qepctd="${esc(d)}" value="${a ? a.pct : 20}" ${a ? '' : 'disabled'}> %</div>`; })}
     <div class="qe-row" style="margin-top:10px;">
       <a href="#detalje/${encodeURIComponent(t.id)}" id="qeDetail" style="font-size:12.5px;color:var(--s-blue);">Åbn i Spor-detalje →</a>
     </div>`;
   qe.style.display = 'block';
   qe.dataset.ms = msId;
+  delete qe.dataset.track;
   const r = qe.getBoundingClientRect();
   qe.style.left = Math.max(8, Math.min(x + 10, innerWidth - r.width - 12)) + 'px';
   qe.style.top = Math.max(8, Math.min(y + 12, innerHeight - r.height - 12)) + 'px';
-  const syncOwner = () => {
-    ms.owner = ALLOC.filter(a => a.msId === ms.id).map(a => (personById(a.p) || { name: a.p }).name).join(', ');
+  /* Friske opslag ved hvert gem: closure-objekterne kan være udskiftet af en
+     realtime-reload, og et gem på et forældet objekt ville rulle kollegers
+     samtidige ændringer tilbage (updMilestone skriver hele rækken). */
+  const tid0 = t.id;
+  const liveMs = () => { const f = findMs(msId); return f ? f.ms : null; };
+  const syncOwner = m2 => {
+    m2.owner = ALLOC.filter(a => a.msId === m2.id).map(a => allocName(a)).join(', ');
   };
   $('#qeClose').addEventListener('click', closeMsQuickEdit);
-  $('#qeLabel').addEventListener('change', e => { ms.label = e.target.value || 'Punkt'; DB.updMilestone(ms); refresh(true); });
+  $('#qeLabel').addEventListener('change', e => { const m2 = liveMs(); if (!m2) return; m2.label = e.target.value || 'Punkt'; DB.updMilestone(m2); refresh(true); });
   $('#qeFrom').addEventListener('change', e => {
-    ms.from = Number(e.target.value); if (ms.from > ms.m) { ms.m = ms.from; $('#qeM').value = String(ms.m); }
-    DB.updMilestone(ms); refresh(true);
+    const m2 = liveMs(); if (!m2) return;
+    m2.from = Number(e.target.value); if (m2.from > m2.m) { m2.m = m2.from; $('#qeM').value = String(m2.m); }
+    DB.updMilestone(m2); refresh(true);
   });
   $('#qeM').addEventListener('change', e => {
-    ms.m = Number(e.target.value); if (ms.from > ms.m) { ms.from = ms.m; $('#qeFrom').value = String(ms.from); }
-    DB.updMilestone(ms); refresh(true);
+    const m2 = liveMs(); if (!m2) return;
+    m2.m = Number(e.target.value); if (m2.from > m2.m) { m2.from = m2.m; $('#qeFrom').value = String(m2.from); }
+    DB.updMilestone(m2); refresh(true);
   });
   $('#qeStatus').addEventListener('change', e => {
-    ms.status = e.target.value;
-    const s2 = STATUS[ms.status] || STATUS.todo;
+    const m2 = liveMs(); if (!m2) return;
+    m2.status = e.target.value;
+    const s2 = STATUS[m2.status] || STATUS.todo;
     e.target.style.borderColor = s2.color; e.target.style.color = s2.color;
-    DB.updMilestone(ms); refresh(true);
+    DB.updMilestone(m2); refresh(true);
   });
   qe.querySelectorAll('[data-qep]').forEach(cb => cb.addEventListener('change', async () => {
+    const m2 = liveMs(); if (!m2) return;
     const pid = cb.dataset.qep;
     const pctInput = qe.querySelector(`[data-qepct="${pid}"]`);
     if (cb.checked) {
-      const a = { p: pid, t: t.id, msId: ms.id, from: ms.from, to: ms.m, pct: Number(pctInput.value) || 20 };
+      const a = { p: pid, dept: null, t: tid0, msId: m2.id, from: m2.from, to: m2.m, pct: Number(pctInput.value) || 20 };
       if (!(await DB.addAlloc(a))) { cb.checked = false; return; }
       ALLOC.push(a);
       pctInput.disabled = false;
     } else {
-      const a = ALLOC.find(x => x.msId === ms.id && x.p === pid);
+      const a = ALLOC.find(x => x.msId === m2.id && x.p === pid);
       if (a) { DB.delAlloc(a.id); ALLOC = ALLOC.filter(x => x !== a); }
       pctInput.disabled = true;
     }
-    syncOwner();
-    DB.updMilestone(ms);
+    syncOwner(m2);
+    DB.updMilestone(m2);
     refresh(true);
   }));
   qe.querySelectorAll('[data-qepct]').forEach(inp => inp.addEventListener('change', () => {
-    const a = ALLOC.find(x => x.msId === ms.id && x.p === inp.dataset.qepct); if (!a) return;
+    const m2 = liveMs(); if (!m2) return;
+    const a = ALLOC.find(x => x.msId === m2.id && x.p === inp.dataset.qepct); if (!a) return;
     a.pct = Number(inp.value) || 0;
     DB.updAlloc(a);
-    syncOwner();
-    DB.updMilestone(ms);
+    syncOwner(m2);
+    DB.updMilestone(m2);
+    refresh(true);
+  }));
+  qe.querySelectorAll('[data-qepd]').forEach(cb => cb.addEventListener('change', async () => {
+    const m2 = liveMs(); if (!m2) return;
+    const d = cb.dataset.qepd;
+    const pctInput = [...qe.querySelectorAll('[data-qepctd]')].find(x => x.dataset.qepctd === d);
+    if (cb.checked) {
+      const a = { p: null, dept: d, t: tid0, msId: m2.id, from: m2.from, to: m2.m, pct: Number(pctInput && pctInput.value) || 20 };
+      if (!(await DB.addAlloc(a))) { cb.checked = false; return; }
+      ALLOC.push(a);
+      if (pctInput) pctInput.disabled = false;
+    } else {
+      const a = ALLOC.find(x => x.msId === m2.id && x.dept === d);
+      if (a) { DB.delAlloc(a.id); ALLOC = ALLOC.filter(x => x !== a); }
+      if (pctInput) pctInput.disabled = true;
+    }
+    syncOwner(m2);
+    DB.updMilestone(m2);
+    refresh(true);
+  }));
+  qe.querySelectorAll('[data-qepctd]').forEach(inp => inp.addEventListener('change', () => {
+    const m2 = liveMs(); if (!m2) return;
+    const a = ALLOC.find(x => x.msId === m2.id && x.dept === inp.dataset.qepctd); if (!a) return;
+    a.pct = Number(inp.value) || 0;
+    DB.updAlloc(a);
+    syncOwner(m2);
+    DB.updMilestone(m2);
     refresh(true);
   }));
   $('#qeDetail').addEventListener('click', e => {
@@ -1481,20 +1774,24 @@ function initControls() {
     setTimeout(() => $('#exportBtn').textContent = 'Kopiér data (JSON)', 1800);
   });
   $('#logoutBtn').addEventListener('click', async () => { if (sb) await sb.auth.signOut(); location.reload(); });
-  addEventListener('resize', () => renderGantt());
+  addEventListener('resize', () => { if (state.view === 'overblik') renderOverblik(); else renderGantt(); });
   if (matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => refresh(false));
 }
 function refresh(rebuildEditors) {
-  /* luk hurtig-redigeringen hvis dens punkt er forsvundet (fx slettet af en kollega) */
+  /* luk hurtig-redigeringen hvis dens punkt/spor er forsvundet (fx slettet af en kollega) */
   const qe = $('#msQuickEdit');
-  if (qe && qe.style.display !== 'none' && qe.dataset.ms && !findMs(qe.dataset.ms)) closeMsQuickEdit();
+  if (qe && qe.style.display !== 'none') {
+    if (qe.dataset.ms && !findMs(qe.dataset.ms)) closeMsQuickEdit();
+    else if (qe.dataset.track && !trackById(qe.dataset.track)) closeMsQuickEdit();
+  }
   renderGantt();
   renderHeat();
   renderWarnings();
-  if (rebuildEditors) { renderTrackEditor(); renderMsEditor(); renderAllocEditor(); renderPeopleEditor(); fillDetailTrackSel(); }
+  if (rebuildEditors) { renderTrackEditor(); renderMsEditor(); renderAllocEditor(); renderPeopleEditor(); fillDetailTrackSel(); fillFilters(); }
   renderDepEditor(); /* status-kolonnen kan ændre sig ved alle redigeringer */
   renderChangelog();
   renderDetail(); /* altid — viser data der ændres fra andre editorer; springer selv over ved aktiv indtastning */
+  renderOverblik();
 }
 function startUI() {
   fillFilters();
