@@ -1477,7 +1477,7 @@ function renderOverblik() {
     const col = `var(${t.color})`;
     const hasFees = t.feeOnce != null || t.feeRec != null;
     const feeTxt = hasFees
-      ? `${t.feeOnce != null ? fmtDKK(t.feeOnce) : '–'} · ${t.feeRec != null ? fmtDKK(t.feeRec) + '/md' : '–'}`
+      ? `${t.feeOnce != null ? fmtDKK(t.feeOnce) : '–'} · ${t.feeRec != null ? fmtDKK(t.feeRec) + '/år' : '–'}`
       : '';
     html += `<div style="position:absolute;left:0;top:${y}px;width:${W}px;height:${ROW}px;border-bottom:1px solid var(--grid);">`;
     html += `<div style="position:absolute;left:0;top:7px;width:${G.labelW-16}px;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${esc(t.name)}</div>`;
@@ -1506,7 +1506,7 @@ function renderOverblik() {
   }
   const sumOnce = TRACKS.reduce((s, t) => s + (t.feeOnce || 0), 0);
   const sumRec = TRACKS.reduce((s, t) => s + (t.feeRec || 0), 0);
-  html += `<div style="position:absolute;left:0;top:${H-22}px;font-size:12px;color:var(--text-secondary);"><b>Samlet:</b> ${fmtDKK(sumOnce)} one-time · ${fmtDKK(sumRec)}/md recurring</div>`;
+  html += `<div style="position:absolute;left:0;top:${H-22}px;font-size:12px;color:var(--text-secondary);"><b>Samlet:</b> ${fmtDKK(sumOnce)} one-time · ${fmtDKK(sumRec)}/år recurring</div>`;
   cont.innerHTML = html;
   cont.querySelectorAll('[data-ovms]').forEach(el => {
     const f = findMs(el.dataset.ovms); if (!f) return;
@@ -1535,7 +1535,7 @@ function openFeeEdit(tid, x, y) {
       <button class="mini-btn" id="qeClose" title="Luk">✕</button>
     </div>
     <div class="qe-row">One-Time Fee <input type="number" id="qeFeeOnce" min="0" step="1000" value="${t.feeOnce == null ? '' : t.feeOnce}" placeholder="–" style="width:110px;margin-left:auto;"> kr</div>
-    <div class="qe-row">Recurring Fee <input type="number" id="qeFeeRec" min="0" step="500" value="${t.feeRec == null ? '' : t.feeRec}" placeholder="–" style="width:110px;margin-left:auto;"> kr/md</div>
+    <div class="qe-row">Recurring Fee <input type="number" id="qeFeeRec" min="0" step="1000" value="${t.feeRec == null ? '' : t.feeRec}" placeholder="–" style="width:110px;margin-left:auto;"> kr/år</div>
     <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Gemmes med det samme. Tomt felt = ikke angivet.</div>`;
   qe.style.display = 'block';
   delete qe.dataset.ms;
