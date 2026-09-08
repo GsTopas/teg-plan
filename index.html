@@ -474,6 +474,7 @@ function subscribeRealtime() {
 const $ = s => document.querySelector(s);
 const state = { person:'', track:'', showDeps:true, detailTrack:'' };
 const openMsGroups = new Set(); /* hvilke spor-grupper i punkt-editoren der står åbne */
+let depDraft = null; /* udkast til ny afhængighed — gemmes først når begge sider er valgt */
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const trackById = id => TRACKS.find(t => t.id === id);
 const personById = id => PEOPLE.find(p => p.id === id);
@@ -1160,6 +1161,17 @@ function renderDepEditor() {
       <td>${stTxt}</td>
       <td><button class="mini-btn" data-ddel="${d.id}" title="Slet">✕</button></td></tr>`;
   });
+  if (depDraft) {
+    html += `<tr>
+      <td><select data-dd="from"><option value="" disabled ${!depDraft.fromMs ? 'selected' : ''}>– vælg forudsætning –</option>${allMilestoneOpts(depDraft.fromMs)}</select></td>
+      <td><select data-dd="type">
+        <option value="start" ${depDraft.type !== 'finish' ? 'selected' : ''}>skal være færdig før START af</option>
+        <option value="finish" ${depDraft.type === 'finish' ? 'selected' : ''}>skal være færdig før AFSLUTNING af</option>
+      </select></td>
+      <td><select data-dd="to"><option value="" disabled ${!depDraft.toT && !depDraft.toMs ? 'selected' : ''}>– vælg mål –</option>${depTargetOpts(depDraft)}</select></td>
+      <td><span style="color:var(--text-muted);font-size:12px;">udkast</span></td>
+      <td><button class="mini-btn" id="depDraftDel" title="Fortryd udkast">✕</button></td></tr>`;
+  }
   html += `</tbody></table>`;
   if (!DEPS.length) html += `<div style="font-size:12.5px;color:var(--text-muted);padding:4px 2px 8px;">Ingen afhængigheder endnu – tilføj den første med knappen herunder. En afhængighed læses: “milepælen til venstre skal være nået, før projektet/milepælen til højre kan starte”.</div>`;
   html += `<button class="add-btn" id="addDep">+ Tilføj afhængighed</button>`;
@@ -1181,14 +1193,30 @@ function renderDepEditor() {
     DEPS = DEPS.filter(x => x.id !== id);
     refresh(true);
   }));
-  $('#addDep').addEventListener('click', async () => {
-    const withMs = TRACKS.find(t => t.milestones.length);
-    if (!withMs) { toast('Opret et punkt først.'); return; }
-    const target = TRACKS.find(t => !t.baseline && t.id !== withMs.id) || withMs;
-    const d = { fromMs: withMs.milestones[0].id, toT: target.id, toMs: null, type: 'start' };
+  /* udkast: tom række der først gemmes, når både forudsætning og mål er valgt */
+  const commitDraft = async () => {
+    if (!depDraft || !depDraft.fromMs || (!depDraft.toT && !depDraft.toMs)) { renderDepEditor(); return; }
+    const d = { fromMs: depDraft.fromMs, toT: depDraft.toT, toMs: depDraft.toMs, type: depDraft.type };
+    depDraft = null;
     if (!(await DB.addDep(d))) return;
     DEPS.push(d);
     refresh(true);
+  };
+  $('#depEditor').querySelectorAll('[data-dd]').forEach(el => el.addEventListener('change', () => {
+    if (!depDraft) return;
+    const f = el.dataset.dd;
+    if (f === 'from') depDraft.fromMs = el.value;
+    else if (f === 'type') depDraft.type = el.value;
+    else if (el.value.startsWith('start:')) { depDraft.toT = el.value.slice(6); depDraft.toMs = null; }
+    else { const msId = el.value.slice(3); const ff = findMs(msId); if (ff) { depDraft.toT = ff.t.id; depDraft.toMs = msId; } }
+    commitDraft();
+  }));
+  const draftDel = $('#depDraftDel');
+  if (draftDel) draftDel.addEventListener('click', () => { depDraft = null; renderDepEditor(); });
+  $('#addDep').addEventListener('click', () => {
+    if (!TRACKS.some(t => t.milestones.length)) { toast('Opret et punkt først.'); return; }
+    depDraft = { fromMs: '', toT: '', toMs: null, type: 'start' };
+    renderDepEditor();
   });
 }
 
