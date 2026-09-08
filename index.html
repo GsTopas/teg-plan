@@ -708,18 +708,19 @@ function renderGantt() {
                      : (T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from);
       if (!(F.t.id in rowIdx) || !(T.t.id in rowIdx)) return;
       const st = depStatus(dep);
-      const color = st === 'conflict' ? cssVar('--status-critical') : cssVar('--text-muted');
+      const color = st === 'conflict' ? cssVar('--status-critical') : st === 'tight' ? cssVar('--status-warning') : cssVar('--text-muted');
       const x1 = G.labelW + (a + 0.5) * colW;
       const y1 = msY[F.ms.id] != null ? msY[F.ms.id] : trackTopY[F.t.id] + 14;
       const x2 = G.labelW + (b + (T.ms ? (isFF ? 0.5 : 0.15) : 0.08)) * colW;
       const y2 = T.ms && msY[T.ms.id] != null ? msY[T.ms.id] : trackTopY[T.t.id] + 14;
       const midY = (y1 + y2) / 2;
-      paths += `<path d="M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2 + (y2>y1?-8:8)}" fill="none" stroke="${color}" stroke-width="1.6" opacity="0.85"${isFF ? ' stroke-dasharray="5 4"' : ''} marker-end="url(#arr${st==='conflict'?'C':'N'})"/>`;
+      paths += `<path d="M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2 + (y2>y1?-8:8)}" fill="none" stroke="${color}" stroke-width="1.6" opacity="0.85"${isFF ? ' stroke-dasharray="5 4"' : ''} marker-end="url(#arr${st==='conflict'?'C':st==='tight'?'W':'N'})"/>`;
     });
     html += `<svg class="g-svg" width="${W}" height="${H}">
       <defs>
         <marker id="arrN" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="${cssVar('--text-muted')}"/></marker>
         <marker id="arrC" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="${cssVar('--status-critical')}"/></marker>
+        <marker id="arrW" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="${cssVar('--status-warning')}"/></marker>
       </defs>${paths}</svg>`;
   }
   cont.innerHTML = html;
@@ -1150,7 +1151,7 @@ function renderDepEditor() {
   let html = `<table class="edit"><thead><tr><th>Forudsætning (milepæl)</th><th>Regel</th><th>→ Afhængigt projekt / milepæl</th><th>Status</th><th></th></tr></thead><tbody>`;
   DEPS.forEach(d => {
     const st = depStatus(d);
-    const stTxt = st==='conflict' ? '<span style="color:var(--status-critical);font-weight:600;">▲ konflikt</span>' : st==='tight' ? '<span style="color:var(--text-secondary);">◆ tæt</span>' : '<span style="color:var(--good-text);">✓ ok</span>';
+    const stTxt = st==='conflict' ? '<span style="color:var(--status-critical);font-weight:600;">▲ konflikt</span>' : st==='tight' ? '<span style="color:var(--status-warning);">◆ tæt</span>' : '<span style="color:var(--good-text);">✓ ok</span>';
     html += `<tr>
       <td><select data-de="${d.id}:from">${allMilestoneOpts(d.fromMs)}</select></td>
       <td><select data-de="${d.id}:type">
