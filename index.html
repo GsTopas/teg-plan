@@ -1433,20 +1433,21 @@ function renderOverblik() {
     const hasFees = t.feeOnce != null || t.feeRec != null;
     const feeTxt = hasFees
       ? `${t.feeOnce != null ? fmtDKK(t.feeOnce) : '–'} · ${t.feeRec != null ? fmtDKK(t.feeRec) + '/md' : '–'}`
-      : 'klik for økonomi';
-    html += `<div data-ovt="${esc(t.id)}" style="position:absolute;left:0;top:${y}px;width:${W}px;height:${ROW}px;border-bottom:1px solid var(--grid);cursor:pointer;" title="Klik: One-Time & Recurring Fee">`;
+      : '';
+    html += `<div style="position:absolute;left:0;top:${y}px;width:${W}px;height:${ROW}px;border-bottom:1px solid var(--grid);">`;
     html += `<div style="position:absolute;left:0;top:7px;width:${G.labelW-16}px;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${esc(t.name)}</div>`;
-    html += `<div style="position:absolute;left:15px;top:24px;width:${G.labelW-30}px;font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(feeTxt)}</div>`;
+    if (feeTxt) html += `<div style="position:absolute;left:15px;top:24px;width:${G.labelW-30}px;font-size:11px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(feeTxt)}</div>`;
     const x1 = G.labelW + t.from * colW + 2;
     const x2solid = G.labelW + (t.solidTo + 1) * colW - 2;
-    /* løbende spor tegnes helt ud til visningens kant */
+    /* løbende spor tegnes helt ud til visningens kant; kun selve bjælken åbner økonomi-boksen */
     const xEnd = t.ongoing ? G.labelW + MCOUNT * colW - 2 : G.labelW + (t.to + 1) * colW - 2;
+    const barAttr = `data-ovbar="${esc(t.id)}" title="Klik: One-Time & Recurring Fee"`;
     if (t.baseline) {
-      html += `<div style="position:absolute;left:${x1}px;top:20px;width:${xEnd-x1}px;height:6px;border-radius:3px;background:${col};opacity:.45;"></div>`;
+      html += `<div ${barAttr} style="position:absolute;left:${x1}px;top:20px;width:${xEnd-x1}px;height:6px;border-radius:3px;background:${col};opacity:.45;cursor:pointer;"></div>`;
     } else {
-      html += `<div style="position:absolute;left:${x1}px;top:17px;width:${x2solid-x1}px;height:12px;border-radius:6px;background:${col};"></div>`;
+      html += `<div ${barAttr} style="position:absolute;left:${x1}px;top:17px;width:${x2solid-x1}px;height:12px;border-radius:6px;background:${col};cursor:pointer;"></div>`;
       if (xEnd > x2solid + 2) {
-        html += `<div style="position:absolute;left:${x2solid+2}px;top:20px;width:${xEnd-x2solid-2}px;height:6px;border-radius:3px;background:${col};opacity:.30;"></div>`;
+        html += `<div ${barAttr} style="position:absolute;left:${x2solid+2}px;top:20px;width:${xEnd-x2solid-2}px;height:6px;border-radius:3px;background:${col};opacity:.30;cursor:pointer;"></div>`;
       }
       t.milestones.forEach(ms => {
         const mx = G.labelW + (ms.m + 0.5) * colW;
@@ -1474,9 +1475,9 @@ function renderOverblik() {
     el.addEventListener('click', e => { e.stopPropagation(); hideTT(); openMsQuickEdit(f.ms.id, e.clientX, e.clientY); });
     el.addEventListener('keydown', e => { if (e.key === 'Enter') { hideTT(); const r = el.getBoundingClientRect(); openMsQuickEdit(f.ms.id, r.left, r.bottom + 6); } });
   });
-  cont.querySelectorAll('[data-ovt]').forEach(el => el.addEventListener('click', e => {
+  cont.querySelectorAll('[data-ovbar]').forEach(el => el.addEventListener('click', e => {
     e.stopPropagation();
-    openFeeEdit(el.dataset.ovt, e.clientX, e.clientY);
+    openFeeEdit(el.dataset.ovbar, e.clientX, e.clientY);
   }));
 }
 function openFeeEdit(tid, x, y) {
