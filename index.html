@@ -479,7 +479,7 @@ const trackById = id => TRACKS.find(t => t.id === id);
 const personById = id => PEOPLE.find(p => p.id === id);
 const personDisp = p => p.name; /* navne er entydige i plan_people */
 /* En allokering peger på en person ELLER en hel afdeling */
-const allocName = a => a.dept ? a.dept : allocName(a);
+const allocName = a => a.dept ? a.dept : (personById(a.p) || { name: a.p }).name;
 function deptAllocNames() { return [...new Set(ALLOC.filter(a => a.dept).map(a => a.dept))]; }
 function deptLoadFor(dept, monthIdx, trackId) {
   let sum = 0;
