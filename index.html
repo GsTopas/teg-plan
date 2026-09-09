@@ -1505,6 +1505,7 @@ function renderOverblik() {
   const tx = G.labelW + Math.min(MCOUNT, Math.max(0, rawToday)) * colW;
   html += `<div style="position:absolute;left:${tx}px;top:${G.headH-8}px;height:${H - G.headH - 24}px;width:2px;background:var(--text-muted);opacity:.6;"></div>
            <div style="position:absolute;left:${tx-13}px;top:${H-24}px;font-size:10px;color:var(--text-muted);">i dag</div>`;
+  const msYo = {}, trackYo = {}; /* lodrette ankre til afhængighedspile */
   items.forEach(it => {
     if (it.type === 'head') {
       html += `<div style="position:absolute;left:0;top:${it.y + 12}px;font-size:11.5px;font-weight:650;letter-spacing:.6px;text-transform:uppercase;color:var(--text-secondary);">${esc(it.label)}</div>`;
@@ -1512,6 +1513,7 @@ function renderOverblik() {
     }
     const { t, feeParts, y, h } = it;
     const col = `var(${t.color})`;
+    trackYo[t.id] = y + 23;
     html += `<div style="position:absolute;left:0;top:${y}px;width:${W}px;height:${h}px;border-bottom:1px solid var(--grid);">`;
     html += `<div style="position:absolute;left:0;top:7px;width:${G.labelW-16}px;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${esc(t.name)}</div>`;
     feeParts.forEach((p, i) => {
@@ -1531,6 +1533,7 @@ function renderOverblik() {
       }
       t.milestones.forEach(ms => {
         const mx = G.labelW + (ms.m + 0.5) * colW;
+        msYo[ms.id] = y + 23;
         html += `<div data-ovms="${esc(ms.id)}" tabindex="0" style="position:absolute;left:${mx-4.5}px;top:${18.5}px;width:9px;height:9px;background:${col};transform:rotate(45deg);border:1.5px solid var(--surface-1);border-radius:1.5px;cursor:pointer;${ms.status === 'faerdig' ? 'opacity:.55;' : ''}"></div>`;
       });
     }
@@ -1538,6 +1541,32 @@ function renderOverblik() {
   });
   if (!tracks.length) {
     html += `<div style="position:absolute;left:${G.labelW}px;top:${G.headH + 10}px;font-size:12.5px;color:var(--text-muted);">Ingen spor endnu – opret det første under Redigér data → Spor (projekter).</div>`;
+  }
+  /* afhængighedspile — samme regler og farver som i tidslinjen */
+  if (state.showDeps) {
+    let paths = '';
+    DEPS.forEach(dep => {
+      const F = depFrom(dep), T = depTo(dep);
+      if (!F || !T) return;
+      const isFF = dep.type === 'finish';
+      const a = F.ms.m;
+      const b = isFF ? (T.ms ? T.ms.m : T.t.solidTo) : (T.ms ? (T.ms.from != null ? T.ms.from : T.ms.m) : T.t.from);
+      const y1 = msYo[F.ms.id];
+      const y2 = T.ms ? msYo[T.ms.id] : trackYo[T.t.id];
+      if (y1 == null || y2 == null) return;
+      const st = depStatus(dep);
+      const color = st === 'conflict' ? cssVar('--status-critical') : st === 'tight' ? cssVar('--status-warning') : cssVar('--text-muted');
+      const x1 = G.labelW + (a + 0.5) * colW;
+      const x2 = G.labelW + (b + (T.ms ? (isFF ? 0.5 : 0.15) : 0.08)) * colW;
+      const midY = (y1 + y2) / 2;
+      paths += `<path d="M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2 + (y2 > y1 ? -7 : 7)}" fill="none" stroke="${color}" stroke-width="1.4" opacity="0.8"${isFF ? ' stroke-dasharray="5 4"' : ''} marker-end="url(#ovArr${st === 'conflict' ? 'C' : st === 'tight' ? 'W' : 'N'})"/>`;
+    });
+    if (paths) html += `<svg style="position:absolute;left:0;top:0;pointer-events:none;" width="${W}" height="${H}">
+      <defs>
+        <marker id="ovArrN" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="${cssVar('--text-muted')}"/></marker>
+        <marker id="ovArrC" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="${cssVar('--status-critical')}"/></marker>
+        <marker id="ovArrW" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="${cssVar('--status-warning')}"/></marker>
+      </defs>${paths}</svg>`;
   }
   const sumOnce = TRACKS.reduce((s, t) => s + (t.feeOnce || 0), 0);
   const sumRec = TRACKS.reduce((s, t) => s + (t.feeRec || 0) + (t.feeExtra || 0), 0);
