@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>TEG Digitalisering – 18 måneders plan</title>
+<title>TEG Digitalisering – leveranceplan</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root {
@@ -201,8 +201,8 @@
 <div class="wrap">
   <header class="top">
     <div>
-      <h1>TEG Digitalisering – 18 måneders leveranceplan</h1>
-      <div class="subtitle">Juli 2026 – december 2027 · månedlig granularitet · ressourcer &amp; afhængigheder. Alle ændringer under “Redigér data” <b>gemmes automatisk</b> og deles med alle, der har planen åben.</div>
+      <h1>TEG Digitalisering – leveranceplan</h1>
+      <div class="subtitle">Juli 2026 – juni 2028 · månedlig granularitet · ressourcer &amp; afhængigheder. Alle ændringer under “Redigér data” <b>gemmes automatisk</b> og deles med alle, der har planen åben.</div>
     </div>
     <div class="top-actions">
       <button class="btn" id="themeBtn" title="Skift mellem lys og mørk">Lys/mørk</button>
@@ -312,7 +312,7 @@
     <div id="warnings"></div>
   </section>
 
-  <footer>TEG 18-måneders digitaliseringsplan · genereret 14. juli 2026 · baseret på “TEG 3 Års Digitaliserings plan”.</footer>
+  <footer>TEG digitaliseringsplan (jul 2026 – jun 2028) · oprettet 14. juli 2026 · baseret på “TEG 3 Års Digitaliserings plan”.</footer>
 </div>
 <div id="msQuickEdit"></div>
 <div id="tooltip" role="tooltip"></div>
@@ -338,8 +338,8 @@ const SUPABASE_ANON_KEY = 'sb_publishable_1J98JZQ2qBBer2cI-hS3Tg_rPXC2sFC';
 const MONTHS = [];
 (function(){
   const names = ['Jan','Feb','Mar','Apr','Maj','Jun','Jul','Aug','Sep','Okt','Nov','Dec'];
-  let y = 2026, m = 6; // Jul 2026
-  for (let i = 0; i < 18; i++) {
+  let y = 2026, m = 6; // Jul 2026 … Jun 2028 (24 mdr, t.o.m. Q2 2028)
+  for (let i = 0; i < 24; i++) {
     MONTHS.push({ label: names[m], year: y, full: names[m] + ' ' + y, q: 'Q' + (Math.floor(m/3)+1) + ' ' + y });
     m++; if (m > 11) { m = 0; y++; }
   }
@@ -355,7 +355,7 @@ const TODAY_X = (() => {
   const now = new Date();
   const idx = (now.getFullYear() - 2026) * 12 + now.getMonth() - 6;
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  return Math.min(18, Math.max(0, idx + (now.getDate() - 1) / daysInMonth));
+  return Math.min(MONTHS.length, Math.max(0, idx + (now.getDate() - 1) / daysInMonth));
 })();
 
 /* ================== DATA (fyldes fra Supabase eller demo-seed) ================== */
@@ -622,7 +622,7 @@ function renderGantt() {
   const outerW = $('#gantt-outer').clientWidth;
   const W = Math.max(outerW, 980);
   const plotW = W - G.labelW;
-  const colW = plotW / 18;
+  const colW = plotW / MONTHS.length;
   /* Dynamisk rækkehøjde: hvert spor har en slank samle-linje + én sub-række pr. opgave */
   const SUBH = 33, GHEAD = 25, GPAD = 7;
   const geo = tracks.map(t => ({ t, h: t.baseline ? 40 : GHEAD + t.milestones.length * SUBH + GPAD }));
@@ -639,7 +639,7 @@ function renderGantt() {
   MONTHS.forEach((mo,i) => {
     html += `<div style="position:absolute;left:${G.labelW + i*colW}px;top:18px;width:${colW}px;font-size:10.5px;color:var(--text-muted);text-align:center;">${mo.label}</div>`;
   });
-  for (let i = 0; i <= 18; i++) {
+  for (let i = 0; i <= MONTHS.length; i++) {
     const isQ = i % 3 === 0;
     html += `<div style="position:absolute;left:${G.labelW + i*colW}px;top:${G.headH-8}px;bottom:0;width:1px;background:${isQ?'var(--axis)':'var(--grid)'};"></div>`;
   }
@@ -761,7 +761,7 @@ function renderHeat() {
     MONTHS.map(m => `<th>${m.label}<br><span style="font-weight:400">${String(m.year).slice(2)}</span></th>`).join('') + `</tr></thead><tbody>`;
   people.forEach(p => {
     html += `<tr><th class="person">${esc(p.name)}<span class="role">${esc(p.dept || p.role)}</span></th>`;
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < MONTHS.length; i++) {
       const v = loadFor(p.id, i, state.track || null);
       if (v === 0) { html += `<td style="background:transparent;color:var(--grid);border:1px dashed var(--grid);">·</td>`; continue; }
       const c = heatColor(v);
@@ -774,7 +774,7 @@ function renderHeat() {
      kendes ikke, så de markeres kun visuelt, ikke som overbookede advarsler */
   if (!state.person) deptAllocNames().forEach(d => {
     html += `<tr><th class="person">${esc(d)}<span class="role">afdeling</span></th>`;
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < MONTHS.length; i++) {
       const v = deptLoadFor(d, i, state.track || null);
       if (v === 0) { html += `<td style="background:transparent;color:var(--grid);border:1px dashed var(--grid);">·</td>`; continue; }
       const c = heatColor(v);
@@ -816,8 +816,8 @@ function renderWarnings() {
   const items = [];
   PEOPLE.forEach(p => {
     let run = null;
-    for (let i = 0; i <= 18; i++) {
-      const v = i < 18 ? loadFor(p.id, i) : 0;
+    for (let i = 0; i <= MONTHS.length; i++) {
+      const v = i < MONTHS.length ? loadFor(p.id, i) : 0;
       if (v > 100 && !run) run = { from: i, max: v };
       else if (v > 100 && run) run.max = Math.max(run.max, v);
       else if (v <= 100 && run) {
@@ -1076,7 +1076,7 @@ function renderTrackEditor() {
     const free = COLOR_SLOTS.find(([c]) => c !== '--s-gray' && !used.has(c));
     const maxSort = TRACKS.reduce((m, x) => Math.max(m, Number(x.sort) || 0), 0);
     const t = { id: slugifyTrack('nyt spor'), name: 'Nyt spor', owner: '', color: (free ? free[0] : '--s-blue'),
-                from: 0, solidTo: 17, to: 17, ongoing: false, baseline: false, sort: maxSort + 1, milestones: [] };
+                from: 0, solidTo: MONTHS.length - 1, to: MONTHS.length - 1, ongoing: false, baseline: false, sort: maxSort + 1, milestones: [] };
     if (!(await DB.addTrack(t))) return;
     TRACKS.push(t);
     fillFilters();
@@ -1145,7 +1145,7 @@ function renderAllocEditor() {
   }));
   $('#addAlloc').addEventListener('click', async () => {
     const base = TRACKS.find(t => t.baseline) || TRACKS[0];
-    const a = { p: PEOPLE[0] ? PEOPLE[0].id : 'gorm', t: base ? base.id : 'drift', msId: null, from: 0, to: 17, pct: 10 };
+    const a = { p: PEOPLE[0] ? PEOPLE[0].id : 'gorm', t: base ? base.id : 'drift', msId: null, from: 0, to: MONTHS.length - 1, pct: 10 };
     if (!(await DB.addAlloc(a))) return;
     ALLOC.push(a);
     refresh(true);
@@ -1814,7 +1814,7 @@ function initControls() {
     refresh(false);
   });
   $('#exportBtn').addEventListener('click', async () => {
-    const data = JSON.stringify({ horizon:'2026-07..2027-12', people:PEOPLE, tracks:TRACKS, allocations:ALLOC, dependencies:DEPS, subtasks:SUBTASKS }, null, 2);
+    const data = JSON.stringify({ horizon:'2026-07..2028-06', people:PEOPLE, tracks:TRACKS, allocations:ALLOC, dependencies:DEPS, subtasks:SUBTASKS }, null, 2);
     try { await navigator.clipboard.writeText(data); $('#exportBtn').textContent = 'Kopieret ✓'; }
     catch { const b = new Blob([data], {type:'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href=u; a.download='teg-plan-data.json'; a.click(); }
     setTimeout(() => $('#exportBtn').textContent = 'Kopiér data (JSON)', 1800);
