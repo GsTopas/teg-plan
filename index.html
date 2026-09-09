@@ -392,7 +392,7 @@ async function loadAll() {
   for (const r of [pe, tr, ms, al, de]) if (r.error) { toast('Kunne ikke hente data: ' + r.error.message); return; }
   PEOPLE = pe.data.map(r => ({ id:r.id, name:r.name, role:r.role, dept:r.department || '', sort:r.sort }));
   /* farve-slottet interpoleres i style-attributter — accepter kun kendte slots */
-  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:(/^--s-[a-z]+$/.test(r.color || '') ? r.color : '--s-gray'), from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, feeOnce:(r.fee_onetime == null ? null : Number(r.fee_onetime)), feeRec:(r.fee_recurring == null ? null : Number(r.fee_recurring)), feeExtra:(r.fee_extra == null ? null : Number(r.fee_extra)), feeExtraLabel:(r.fee_extra_label || ''), milestones:[] }));
+  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:(/^--s-[a-z]+$/.test(r.color || '') ? r.color : '--s-gray'), from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, feeOnce:(r.fee_onetime == null ? null : Number(r.fee_onetime)), feeRec:(r.fee_recurring == null ? null : Number(r.fee_recurring)), feeExtra:(r.fee_extra == null ? null : Number(r.fee_extra)), feeExtraLabel:(r.fee_extra_label || ''), category:(r.category || ''), milestones:[] }));
   ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner, status:r.status || 'todo' }); });
   /* afdelingslisten er ikke kritisk — mangler den, udledes afdelinger af personerne */
   const dp = await sb.from('plan_departments').select('*').order('sort');
@@ -419,10 +419,10 @@ const DB = {
   },
   updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner, status:ms.status || 'todo' }).eq('id', ms.id)); },
   delMilestone(id) { if (sb) dbTry(sb.from('plan_milestones').delete().eq('id', id)); },
-  updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, sort:(t.sort == null ? null : t.sort), fee_onetime:(t.feeOnce == null ? null : t.feeOnce), fee_recurring:(t.feeRec == null ? null : t.feeRec), fee_extra:(t.feeExtra == null ? null : t.feeExtra), fee_extra_label:(t.feeExtraLabel || null) }).eq('id', t.id)); },
+  updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, sort:(t.sort == null ? null : t.sort), fee_onetime:(t.feeOnce == null ? null : t.feeOnce), fee_recurring:(t.feeRec == null ? null : t.feeRec), fee_extra:(t.feeExtra == null ? null : t.feeExtra), fee_extra_label:(t.feeExtraLabel || null), category:(t.category || null) }).eq('id', t.id)); },
   async addTrack(t) {
     if (!sb) return true;
-    const d = await dbTry(sb.from('plan_tracks').insert({ id:t.id, name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, ongoing:t.ongoing, baseline:t.baseline, sort:t.sort }).select().single());
+    const d = await dbTry(sb.from('plan_tracks').insert({ id:t.id, name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, ongoing:t.ongoing, baseline:t.baseline, sort:t.sort, category:(t.category || null) }).select().single());
     return !!d;
   },
   delTrack(id) { if (sb) dbTry(sb.from('plan_tracks').delete().eq('id', id)); },
@@ -1021,10 +1021,11 @@ function slugifyTrack(name) {
   return id;
 }
 function renderTrackEditor() {
-  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Farve</th><th>Fra</th><th>Til</th><th>Ejer</th><th>Rækkefølge</th><th></th></tr></thead><tbody>`;
+  let html = `<table class="edit"><thead><tr><th>Spor</th><th>Kategori</th><th>Farve</th><th>Fra</th><th>Til</th><th>Ejer</th><th>Rækkefølge</th><th></th></tr></thead><tbody>`;
   visibleTracks().forEach(t => {
     html += `<tr>
       <td style="white-space:nowrap;"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(${t.color});margin-right:5px;"></span><input type="text" value="${esc(t.name)}" data-te="${t.id}:name" style="width:230px"></td>
+      <td><select data-te="${esc(t.id)}:category"><option value="" ${!t.category ? 'selected' : ''}>–</option>${TRACK_CATS.map(c => `<option value="${esc(c)}" ${t.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></td>
       <td><select data-te="${esc(t.id)}:color">${COLOR_SLOTS.map(([c, lbl]) => `<option value="${c}" ${t.color === c ? 'selected' : ''}>${lbl}</option>`).join('')}</select></td>
       <td><select data-te="${esc(t.id)}:from">${monthOptions(t.from)}</select></td>
       <td><select data-te="${esc(t.id)}:solidTo">${monthOptions(t.solidTo)}</select></td>
@@ -1043,6 +1044,7 @@ function renderTrackEditor() {
     if (f === 'from') { t.from = Number(el.value); if (t.from > t.solidTo) t.solidTo = t.from; }
     else if (f === 'solidTo') { t.solidTo = Number(el.value); if (t.solidTo < t.from) t.from = t.solidTo; }
     else if (f === 'color') { if (COLOR_SLOTS.some(([c]) => c === el.value)) t.color = el.value; }
+    else if (f === 'category') { t.category = TRACK_CATS.includes(el.value) ? el.value : ''; }
     else t[f] = el.value;
     /* løbende spor vises horisonten ud; afsluttede spor slutter ved 'Til' */
     t.to = t.ongoing ? Math.max(t.to, t.solidTo) : t.solidTo;
@@ -1085,7 +1087,7 @@ function renderTrackEditor() {
     const free = COLOR_SLOTS.find(([c]) => c !== '--s-gray' && !used.has(c));
     const maxSort = TRACKS.reduce((m, x) => Math.max(m, Number(x.sort) || 0), 0);
     const t = { id: slugifyTrack('nyt spor'), name: 'Nyt spor', owner: '', color: (free ? free[0] : '--s-blue'),
-                from: 0, solidTo: MONTHS.length - 1, to: MONTHS.length - 1, ongoing: false, baseline: false, sort: maxSort + 1, milestones: [] };
+                from: 0, solidTo: MONTHS.length - 1, to: MONTHS.length - 1, ongoing: false, baseline: false, sort: maxSort + 1, category: '', feeOnce: null, feeRec: null, feeExtra: null, feeExtraLabel: '', milestones: [] };
     if (!(await DB.addTrack(t))) return;
     TRACKS.push(t);
     fillFilters();
@@ -1247,6 +1249,8 @@ function renderDepEditor() {
 }
 
 /* ================== SPOR-DETALJE ================== */
+/* Spor-kategorier: rækkefølgen her bestemmer overskrifts-rækkefølgen i Overblik */
+const TRACK_CATS = ['Salg', 'Backoffice Optimering', 'Vedligeholdelse & Uddannelse'];
 /* Faste farve-slots (colorblind-safe i begge temaer) — grå er reserveret basisdrift */
 const COLOR_SLOTS = [
   ['--s-blue', 'Blå'], ['--s-aqua', 'Søgrøn'], ['--s-yellow', 'Gul'], ['--s-green', 'Grøn'],
@@ -1422,7 +1426,7 @@ function renderChangelog() {
     return;
   }
   const tblNavn = { plan_milestones:'punktet', plan_allocations:'allokeringen', plan_tracks:'sporet', plan_dependencies:'en afhængighed', plan_people:'personen', plan_subtasks:'delopgaven', plan_departments:'afdelingen' };
-  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig', due_date:'senest', department:'afdeling', fee_onetime:'one-time fee', fee_recurring:'recurring fee', fee_extra:'ekstra recurring', fee_extra_label:'ekstra-etiket' };
+  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig', due_date:'senest', department:'afdeling', fee_onetime:'one-time fee', fee_recurring:'recurring fee', fee_extra:'ekstra recurring', fee_extra_label:'ekstra-etiket', category:'kategori' };
   const mdr = i => (typeof i === 'number' && MONTHS[i]) ? MONTHS[i].full : i;
   const vis = (k, v) => {
     if (v == null) return '–';
@@ -1471,12 +1475,20 @@ function renderOverblik() {
     if (t.feeExtra != null) p.push(`${t.feeExtraLabel || 'Ekstra'}: ${fmtDKK(t.feeExtra)}/år`);
     return p;
   };
-  const geo = tracks.map(t => {
-    const feeParts = feePartsFor(t);
-    return { t, feeParts, h: Math.max(46, 27 + feeParts.length * 14 + 7) };
+  /* gruppér efter kategori i fast rækkefølge; ukategoriserede samles under "Øvrige" */
+  const catOrder = [...TRACK_CATS, ''];
+  const items = [];
+  catOrder.forEach(c => {
+    const list = tracks.filter(t => (t.category || '') === c || (c === '' && !TRACK_CATS.includes(t.category)));
+    if (!list.length) return;
+    items.push({ type: 'head', label: c || 'Øvrige', h: 32 });
+    list.forEach(t => {
+      const feeParts = feePartsFor(t);
+      items.push({ type: 'track', t, feeParts, h: Math.max(46, 27 + feeParts.length * 14 + 7) });
+    });
   });
-  { let acc = G.headH; geo.forEach(g => { g.y = acc; acc += g.h; }); }
-  const H = (geo.length ? geo[geo.length - 1].y + geo[geo.length - 1].h : G.headH) + 36;
+  { let acc = G.headH; items.forEach(it => { it.y = acc; acc += it.h; }); }
+  const H = (items.length ? items[items.length - 1].y + items[items.length - 1].h : G.headH) + 36;
   cont.style.width = W + 'px';
   cont.style.height = H + 'px';
   const qLabels = [];
@@ -1493,7 +1505,12 @@ function renderOverblik() {
   const tx = G.labelW + Math.min(MCOUNT, Math.max(0, rawToday)) * colW;
   html += `<div style="position:absolute;left:${tx}px;top:${G.headH-8}px;height:${H - G.headH - 24}px;width:2px;background:var(--text-muted);opacity:.6;"></div>
            <div style="position:absolute;left:${tx-13}px;top:${H-24}px;font-size:10px;color:var(--text-muted);">i dag</div>`;
-  geo.forEach(({ t, feeParts, y, h }) => {
+  items.forEach(it => {
+    if (it.type === 'head') {
+      html += `<div style="position:absolute;left:0;top:${it.y + 12}px;font-size:11.5px;font-weight:650;letter-spacing:.6px;text-transform:uppercase;color:var(--text-secondary);">${esc(it.label)}</div>`;
+      return;
+    }
+    const { t, feeParts, y, h } = it;
     const col = `var(${t.color})`;
     html += `<div style="position:absolute;left:0;top:${y}px;width:${W}px;height:${h}px;border-bottom:1px solid var(--grid);">`;
     html += `<div style="position:absolute;left:0;top:7px;width:${G.labelW-16}px;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${esc(t.name)}</div>`;
