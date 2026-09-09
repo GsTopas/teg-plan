@@ -359,7 +359,7 @@ const TODAY_X = (() => {
 })();
 
 /* ================== DATA (fyldes fra Supabase eller demo-seed) ================== */
-let PEOPLE = [], TRACKS = [], ALLOC = [], DEPS = [], CHANGELOG = [], SUBTASKS = [];
+let PEOPLE = [], TRACKS = [], ALLOC = [], DEPS = [], CHANGELOG = [], SUBTASKS = [], DEPTS = [];
 let sb = null, localSeq = 0, booted = false;
 const locId = () => 'loc-' + (++localSeq);
 
@@ -394,6 +394,9 @@ async function loadAll() {
   /* farve-slottet interpoleres i style-attributter — accepter kun kendte slots */
   TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:(/^--s-[a-z]+$/.test(r.color || '') ? r.color : '--s-gray'), from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, feeOnce:(r.fee_onetime == null ? null : Number(r.fee_onetime)), feeRec:(r.fee_recurring == null ? null : Number(r.fee_recurring)), milestones:[] }));
   ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner, status:r.status || 'todo' }); });
+  /* afdelingslisten er ikke kritisk — mangler den, udledes afdelinger af personerne */
+  const dp = await sb.from('plan_departments').select('*').order('sort');
+  DEPTS = dp.error ? [] : dp.data.map(r => r.name);
   /* delopgaver er ikke kritiske — fejler tabellen, vises resten af planen alligevel */
   const st = await sb.from('plan_subtasks').select('*').order('created_at');
   SUBTASKS = st.error ? [] : st.data.map(r => ({ id:r.id, msId:r.milestone_id, label:r.label, p:r.person_id, hours:(r.hours == null ? null : Number(r.hours)), status:(r.status || (r.done ? 'faerdig' : 'todo')), done:(r.status ? r.status === 'faerdig' : r.done), due:r.due_date || null }));
@@ -457,6 +460,11 @@ const DB = {
     return !!d;
   },
   updPerson(p) { if (sb) dbTry(sb.from('plan_people').update({ name:p.name, role:p.role || '', department:p.dept || '' }).eq('id', p.id)); },
+  addDeptIfNew(name) {
+    if (!name || DEPTS.includes(name)) return;
+    DEPTS.push(name);
+    if (sb) dbTry(sb.from('plan_departments').insert({ name, sort: DEPTS.length }));
+  },
   delPerson(id) { if (sb) dbTry(sb.from('plan_people').delete().eq('id', id)); },
 };
 function subscribeRealtime() {
@@ -465,7 +473,7 @@ function subscribeRealtime() {
   /* Genbyg ikke editorerne mens en ejer-popup er åben — det ville lukke den midt i valget */
   const reload = () => { clearTimeout(t); t = setTimeout(async () => { await loadAll(); refresh(!document.querySelector('details.owner-pick[open]')); }, 350); };
   const ch = sb.channel('plan-sync');
-  ['plan_people','plan_tracks','plan_milestones','plan_allocations','plan_dependencies','plan_changelog','plan_subtasks']
+  ['plan_people','plan_tracks','plan_milestones','plan_allocations','plan_dependencies','plan_changelog','plan_subtasks','plan_departments']
     .forEach(tb => ch.on('postgres_changes', { event:'*', schema:'public', table:tb }, reload));
   ch.subscribe();
 }
@@ -495,12 +503,13 @@ function deptLoadFor(dept, monthIdx, trackId) {
 /* Personer grupperet pr. afdeling — bruges af alle person-vælgere */
 function peopleByDept() {
   const m = new Map();
+  DEPTS.forEach(d => m.set(d, [])); /* afdelinger uden personer skal også kunne vælges på opgaver */
   PEOPLE.forEach(p => { const d = p.dept || 'Øvrige'; if (!m.has(d)) m.set(d, []); m.get(d).push(p); });
   return m;
 }
 function personOptions(selId, emptyLabel) {
   return (emptyLabel != null ? `<option value="">${esc(emptyLabel)}</option>` : '') +
-    [...peopleByDept().entries()].map(([d, ps]) =>
+    [...peopleByDept().entries()].filter(([, ps]) => ps.length).map(([d, ps]) =>
       `<optgroup label="${esc(d)}">` +
       ps.map(p => `<option value="${esc(p.id)}" ${p.id === selId ? 'selected' : ''}>${esc(personDisp(p))}</option>`).join('') +
       `</optgroup>`).join('');
@@ -1412,7 +1421,7 @@ function renderChangelog() {
     el.innerHTML = '<div style="font-size:12.5px;color:var(--text-muted);padding:6px 2px;">Ingen ændringer logget endnu.</div>';
     return;
   }
-  const tblNavn = { plan_milestones:'punktet', plan_allocations:'allokeringen', plan_tracks:'sporet', plan_dependencies:'en afhængighed', plan_people:'personen', plan_subtasks:'delopgaven' };
+  const tblNavn = { plan_milestones:'punktet', plan_allocations:'allokeringen', plan_tracks:'sporet', plan_dependencies:'en afhængighed', plan_people:'personen', plan_subtasks:'delopgaven', plan_departments:'afdelingen' };
   const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig', due_date:'senest', department:'afdeling', fee_onetime:'one-time fee', fee_recurring:'recurring fee' };
   const mdr = i => (typeof i === 'number' && MONTHS[i]) ? MONTHS[i].full : i;
   const vis = (k, v) => {
@@ -1618,7 +1627,7 @@ function resyncOwnersFor(pid) {
 }
 function renderPeopleEditor() {
   const el = $('#peopleEditor'); if (!el) return;
-  const depts = [...new Set(PEOPLE.map(p => p.dept).filter(Boolean))];
+  const depts = [...new Set([...DEPTS, ...PEOPLE.map(p => p.dept).filter(Boolean)])];
   let html = `<datalist id="deptList">${depts.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist>
     <table class="edit"><thead><tr><th>Navn</th><th>Afdeling</th><th>Rolle (valgfri)</th><th></th></tr></thead><tbody>`;
   PEOPLE.forEach(p => {
@@ -1637,7 +1646,7 @@ function renderPeopleEditor() {
     const id = inp.dataset.pe.slice(0, idx), f = inp.dataset.pe.slice(idx + 1);
     const p = personById(id); if (!p) return;
     if (f === 'name') { p.name = inp.value.trim() || 'Person'; resyncOwnersFor(p.id); }
-    else if (f === 'dept') p.dept = inp.value.trim();
+    else if (f === 'dept') { p.dept = inp.value.trim(); DB.addDeptIfNew(p.dept); }
     else p.role = inp.value.trim();
     DB.updPerson(p);
     refresh(true);
