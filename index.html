@@ -392,7 +392,7 @@ async function loadAll() {
   for (const r of [pe, tr, ms, al, de]) if (r.error) { toast('Kunne ikke hente data: ' + r.error.message); return; }
   PEOPLE = pe.data.map(r => ({ id:r.id, name:r.name, role:r.role, dept:r.department || '', sort:r.sort }));
   /* farve-slottet interpoleres i style-attributter — accepter kun kendte slots */
-  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:(/^--s-[a-z]+$/.test(r.color || '') ? r.color : '--s-gray'), from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, feeOnce:(r.fee_onetime == null ? null : Number(r.fee_onetime)), feeRec:(r.fee_recurring == null ? null : Number(r.fee_recurring)), milestones:[] }));
+  TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:(/^--s-[a-z]+$/.test(r.color || '') ? r.color : '--s-gray'), from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, feeOnce:(r.fee_onetime == null ? null : Number(r.fee_onetime)), feeRec:(r.fee_recurring == null ? null : Number(r.fee_recurring)), feeExtra:(r.fee_extra == null ? null : Number(r.fee_extra)), feeExtraLabel:(r.fee_extra_label || ''), milestones:[] }));
   ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner, status:r.status || 'todo' }); });
   /* afdelingslisten er ikke kritisk — mangler den, udledes afdelinger af personerne */
   const dp = await sb.from('plan_departments').select('*').order('sort');
@@ -419,7 +419,7 @@ const DB = {
   },
   updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner, status:ms.status || 'todo' }).eq('id', ms.id)); },
   delMilestone(id) { if (sb) dbTry(sb.from('plan_milestones').delete().eq('id', id)); },
-  updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, sort:(t.sort == null ? null : t.sort), fee_onetime:(t.feeOnce == null ? null : t.feeOnce), fee_recurring:(t.feeRec == null ? null : t.feeRec) }).eq('id', t.id)); },
+  updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, sort:(t.sort == null ? null : t.sort), fee_onetime:(t.feeOnce == null ? null : t.feeOnce), fee_recurring:(t.feeRec == null ? null : t.feeRec), fee_extra:(t.feeExtra == null ? null : t.feeExtra), fee_extra_label:(t.feeExtraLabel || null) }).eq('id', t.id)); },
   async addTrack(t) {
     if (!sb) return true;
     const d = await dbTry(sb.from('plan_tracks').insert({ id:t.id, name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, ongoing:t.ongoing, baseline:t.baseline, sort:t.sort }).select().single());
@@ -1422,7 +1422,7 @@ function renderChangelog() {
     return;
   }
   const tblNavn = { plan_milestones:'punktet', plan_allocations:'allokeringen', plan_tracks:'sporet', plan_dependencies:'en afhængighed', plan_people:'personen', plan_subtasks:'delopgaven', plan_departments:'afdelingen' };
-  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig', due_date:'senest', department:'afdeling', fee_onetime:'one-time fee', fee_recurring:'recurring fee' };
+  const feltNavn = { m:'deadline', from_m:'fra', to_m:'til', label:'navn', owner:'ejer(e)', pct:'%', person_id:'person', track_id:'spor', milestone_id:'punkt', solid_to:'til', name:'navn', dep_type:'regel', sort:'rækkefølge', role:'rolle', from_ms:'forudsætning', to_track:'mål', to_ms:'mål-punkt', status:'status', hours:'timer', done:'færdig', due_date:'senest', department:'afdeling', fee_onetime:'one-time fee', fee_recurring:'recurring fee', fee_extra:'ekstra recurring', fee_extra_label:'ekstra-etiket' };
   const mdr = i => (typeof i === 'number' && MONTHS[i]) ? MONTHS[i].full : i;
   const vis = (k, v) => {
     if (v == null) return '–';
@@ -1487,6 +1487,7 @@ function renderOverblik() {
     const feeParts = [];
     if (t.feeOnce != null) feeParts.push(`One-time: ${fmtDKK(t.feeOnce)}`);
     if (t.feeRec != null) feeParts.push(`Recurring: ${fmtDKK(t.feeRec)}/år`);
+    if (t.feeExtra != null) feeParts.push(`${t.feeExtraLabel || 'Ekstra'}: ${fmtDKK(t.feeExtra)}/år`);
     const feeTxt = feeParts.join(' · ');
     html += `<div style="position:absolute;left:0;top:${y}px;width:${W}px;height:${ROW}px;border-bottom:1px solid var(--grid);">`;
     html += `<div style="position:absolute;left:0;top:7px;width:${G.labelW-16}px;font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${col};margin-right:6px;"></span>${esc(t.name)}</div>`;
@@ -1514,7 +1515,7 @@ function renderOverblik() {
     html += `<div style="position:absolute;left:${G.labelW}px;top:${G.headH + 10}px;font-size:12.5px;color:var(--text-muted);">Ingen spor endnu – opret det første under Redigér data → Spor (projekter).</div>`;
   }
   const sumOnce = TRACKS.reduce((s, t) => s + (t.feeOnce || 0), 0);
-  const sumRec = TRACKS.reduce((s, t) => s + (t.feeRec || 0), 0);
+  const sumRec = TRACKS.reduce((s, t) => s + (t.feeRec || 0) + (t.feeExtra || 0), 0);
   html += `<div style="position:absolute;left:0;top:${H-22}px;font-size:12px;color:var(--text-secondary);"><b>Samlet:</b> ${fmtDKK(sumOnce)} one-time · ${fmtDKK(sumRec)}/år recurring</div>`;
   cont.innerHTML = html;
   cont.querySelectorAll('[data-ovms]').forEach(el => {
@@ -1545,6 +1546,9 @@ function openFeeEdit(tid, x, y) {
     </div>
     <div class="qe-row">One-Time Fee <input type="number" id="qeFeeOnce" min="0" step="1000" value="${t.feeOnce == null ? '' : t.feeOnce}" placeholder="–" style="width:110px;margin-left:auto;"> kr</div>
     <div class="qe-row">Recurring Fee <input type="number" id="qeFeeRec" min="0" step="1000" value="${t.feeRec == null ? '' : t.feeRec}" placeholder="–" style="width:110px;margin-left:auto;"> kr/år</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-top:8px;">Ekstra linje (valgfri) — fx en særskilt recurring-post:</div>
+    <div class="qe-row"><input type="text" id="qeFeeXLbl" value="${esc(t.feeExtraLabel || '')}" placeholder="Etiket, fx Topas grupperejser" style="flex:1;"></div>
+    <div class="qe-row">Beløb <input type="number" id="qeFeeX" min="0" step="1000" value="${t.feeExtra == null ? '' : t.feeExtra}" placeholder="–" style="width:110px;margin-left:auto;"> kr/år</div>
     <div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Gemmes med det samme. Tomt felt = ikke angivet.</div>`;
   qe.style.display = 'block';
   delete qe.dataset.ms;
@@ -1563,6 +1567,8 @@ function openFeeEdit(tid, x, y) {
   /* friskt opslag ved hvert gem — closure-objektet kan være udskiftet af en realtime-reload */
   $('#qeFeeOnce').addEventListener('change', e => { const tt = trackById(tid); if (!tt) return; tt.feeOnce = readFee(e.target); DB.updTrack(tt); renderOverblik(); });
   $('#qeFeeRec').addEventListener('change', e => { const tt = trackById(tid); if (!tt) return; tt.feeRec = readFee(e.target); DB.updTrack(tt); renderOverblik(); });
+  $('#qeFeeXLbl').addEventListener('change', e => { const tt = trackById(tid); if (!tt) return; tt.feeExtraLabel = e.target.value.trim(); DB.updTrack(tt); renderOverblik(); });
+  $('#qeFeeX').addEventListener('change', e => { const tt = trackById(tid); if (!tt) return; tt.feeExtra = readFee(e.target); DB.updTrack(tt); renderOverblik(); });
 }
 
 /* ================== VISNINGER (Overblik / Tidslinje / Spor-detalje) ================== */
