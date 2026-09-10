@@ -1527,9 +1527,33 @@ function renderOverblik() {
     if (t.baseline) {
       html += `<div ${barAttr} style="position:absolute;left:${x1}px;top:20px;width:${xEnd-x1}px;height:6px;border-radius:3px;background:${col};opacity:.45;cursor:pointer;"></div>`;
     } else {
-      html += `<div ${barAttr} style="position:absolute;left:${x1}px;top:17px;width:${x2solid-x1}px;height:12px;border-radius:6px;background:${col};cursor:pointer;"></div>`;
-      if (xEnd > x2solid + 2) {
-        html += `<div ${barAttr} style="position:absolute;left:${x2solid+2}px;top:20px;width:${xEnd-x2solid-2}px;height:6px;border-radius:3px;background:${col};opacity:.30;cursor:pointer;"></div>`;
+      /* bjælken tegnes kun i kvartaler med opgaver — kvartaler uden opgaver står blanke */
+      const QN = MCOUNT / 3;
+      const covered = [];
+      for (let q = 0; q < QN; q++) {
+        const qs = q * 3, qe = q * 3 + 2;
+        covered.push(t.milestones.some(ms => ms.from <= qe && ms.m >= qs));
+      }
+      let lastEnd = null;
+      if (covered.some(Boolean)) {
+        let q = 0;
+        while (q < QN) {
+          if (!covered[q]) { q++; continue; }
+          let q2 = q;
+          while (q2 + 1 < QN && covered[q2 + 1]) q2++;
+          const sx = G.labelW + q * 3 * colW + 2;
+          const ex = G.labelW + (q2 + 1) * 3 * colW - 2;
+          html += `<div ${barAttr} style="position:absolute;left:${sx}px;top:17px;width:${ex - sx}px;height:12px;border-radius:6px;background:${col};cursor:pointer;"></div>`;
+          lastEnd = ex;
+          q = q2 + 1;
+        }
+      } else {
+        /* spor uden opgaver endnu: vis sporets egen periode som hidtil */
+        html += `<div ${barAttr} style="position:absolute;left:${x1}px;top:17px;width:${x2solid-x1}px;height:12px;border-radius:6px;background:${col};cursor:pointer;"></div>`;
+        lastEnd = x2solid;
+      }
+      if (t.ongoing && lastEnd != null && xEnd > lastEnd + 2) {
+        html += `<div ${barAttr} style="position:absolute;left:${lastEnd+2}px;top:20px;width:${xEnd-lastEnd-2}px;height:6px;border-radius:3px;background:${col};opacity:.30;cursor:pointer;"></div>`;
       }
       t.milestones.forEach(ms => {
         const mx = G.labelW + (ms.m + 0.5) * colW;
