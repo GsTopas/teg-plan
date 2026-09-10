@@ -1554,12 +1554,12 @@ function renderOverblik() {
     if (t.baseline) {
       html += `<div ${barAttr} style="position:absolute;left:${x1}px;top:20px;width:${xEnd-x1}px;height:6px;border-radius:3px;background:${col};opacity:.45;cursor:pointer;"></div>`;
     } else {
-      /* bjælken tegnes kun i kvartaler med opgaver — kvartaler uden opgaver står blanke */
+      /* bjælken tegnes kun i kvartaler hvor en deadline (◆) ligger — resten står blankt */
       const QN = MCOUNT / 3;
       const covered = [];
       for (let q = 0; q < QN; q++) {
         const qs = q * 3, qe = q * 3 + 2;
-        covered.push(t.milestones.some(ms => ms.from <= qe && ms.m >= qs));
+        covered.push(t.milestones.some(ms => ms.m >= qs && ms.m <= qe));
       }
       let lastEnd = null;
       if (covered.some(Boolean)) {
