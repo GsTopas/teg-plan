@@ -4,7 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TEG Digitalisering – leveranceplan</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://oxpuloflkdcpshrabvkn.supabase.co">
+<!-- defer + fastlåst version: siden kan tegnes med det samme, og CDN'et kan cache aggressivt -->
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.min.js"></script>
 <style>
   :root {
     color-scheme: light;
@@ -369,6 +372,19 @@ function toast(msg) {
   el.textContent = msg; el.style.display = 'block';
   clearTimeout(toast._t); toast._t = setTimeout(() => el.style.display = 'none', 3500);
 }
+/* står brugeren aktivt i et redigeringsfelt eller i en åben ejer-popup?
+   Bruges til at UDSKYDE fulde gentegninger, som ellers ville smide fokus og indtastning væk. */
+function editingNow() {
+  if (document.querySelector('details.owner-pick[open]')) return true;
+  const a = document.activeElement;
+  return !!(a && (a.tagName === 'INPUT' || a.tagName === 'SELECT' || a.tagName === 'TEXTAREA') &&
+    a.closest && a.closest('#trackEditor,#msEditor,#allocEditor,#peopleEditor,#depEditor,#trackDetail,#detailPage,#msQuickEdit'));
+}
+/* fuld gentegning, udskudt til brugeren ikke længere står midt i et felt */
+function refreshWhenIdle() {
+  if (editingNow()) { setTimeout(refreshWhenIdle, 400); return; }
+  refresh(true);
+}
 async function dbTry(q) {
   const { data, error } = await q;
   if (error) {
@@ -376,18 +392,23 @@ async function dbTry(q) {
     toast('Kunne ikke gemme: ' + error.message + ' — genindlæser.');
     /* genindlæs så skærmen viser databasens faktiske tilstand frem for den fejlede ændring */
     await loadAll();
-    refresh(!document.querySelector('details.owner-pick[open]'));
+    refreshWhenIdle();
     return null;
   }
   return data;
 }
 async function loadAll() {
-  const [pe, tr, ms, al, de] = await Promise.all([
+  /* alle 8 tabeller hentes i ÉN parallel omgang — serielle rundture her lå direkte på
+     vejen til første visning og gentoges ved hver realtime-reload */
+  const [pe, tr, ms, al, de, dp, st, ch] = await Promise.all([
     sb.from('plan_people').select('*').order('sort'),
     sb.from('plan_tracks').select('*').order('id'),
     sb.from('plan_milestones').select('*').order('m'),
     sb.from('plan_allocations').select('*').order('from_m'),
     sb.from('plan_dependencies').select('*'),
+    sb.from('plan_departments').select('*').order('sort'),
+    sb.from('plan_subtasks').select('*').order('created_at'),
+    sb.from('plan_changelog').select('*').order('changed_at', { ascending: false }).limit(30),
   ]);
   for (const r of [pe, tr, ms, al, de]) if (r.error) { toast('Kunne ikke hente data: ' + r.error.message); return; }
   PEOPLE = pe.data.map(r => ({ id:r.id, name:r.name, role:r.role, dept:r.department || '', sort:r.sort }));
@@ -395,85 +416,94 @@ async function loadAll() {
   TRACKS = tr.data.map(r => ({ id:r.id, name:r.name, owner:r.owner, color:(/^--s-[a-z]+$/.test(r.color || '') ? r.color : '--s-gray'), from:r.from_m, solidTo:r.solid_to, to:r.to_m, ongoing:r.ongoing, baseline:r.baseline, sort:r.sort, feeOnce:(r.fee_onetime == null ? null : Number(r.fee_onetime)), feeRec:(r.fee_recurring == null ? null : Number(r.fee_recurring)), feeExtra:(r.fee_extra == null ? null : Number(r.fee_extra)), feeExtraLabel:(r.fee_extra_label || ''), category:(r.category || ''), milestones:[] }));
   ms.data.forEach(r => { const t = trackById(r.track_id); if (t) t.milestones.push({ id:r.id, m:r.m, from:(r.from_m == null ? r.m : r.from_m), label:r.label, owner:r.owner, status:r.status || 'todo' }); });
   /* afdelingslisten er ikke kritisk — mangler den, udledes afdelinger af personerne */
-  const dp = await sb.from('plan_departments').select('*').order('sort');
   DEPTS = dp.error ? [] : dp.data.map(r => r.name);
   /* delopgaver er ikke kritiske — fejler tabellen, vises resten af planen alligevel */
-  const st = await sb.from('plan_subtasks').select('*').order('created_at');
   SUBTASKS = st.error ? [] : st.data.map(r => ({ id:r.id, msId:r.milestone_id, label:r.label, p:r.person_id, hours:(r.hours == null ? null : Number(r.hours)), status:(r.status || (r.done ? 'faerdig' : 'todo')), done:(r.status ? r.status === 'faerdig' : r.done), due:r.due_date || null }));
   ALLOC = al.data.map(r => ({ id:r.id, p:r.person_id, dept:r.dept || null, t:r.track_id, from:r.from_m, to:r.to_m, pct:r.pct, msId:r.milestone_id || null }));
   DEPS = de.data.map(r => ({ id:r.id, fromMs:r.from_ms, toT:r.to_track, toMs:r.to_ms, type:r.dep_type || 'start' }));
   /* ændringsloggen er ikke kritisk — fejler den, vises resten alligevel */
-  const ch = await sb.from('plan_changelog').select('*').order('changed_at', { ascending: false }).limit(30);
   CHANGELOG = ch.error ? [] : ch.data;
   /* peger filtrene på et spor, en kollega har slettet, nulstilles de i stedet for at dæmpe alt */
   if (state.track && !trackById(state.track)) state.track = '';
   if (state.detailTrack && !trackById(state.detailTrack)) state.detailTrack = '';
 }
+/* Optimistiske skrivninger: nye rækker får et klient-genereret id og vises MED DET SAMME —
+   INSERT'en sendes i baggrunden i stedet for at blokere UI'et i en netværksrundtur.
+   Fejler den, genindlæser dbTry fra databasen, så skærmen viser sandheden igen.
+   PENDING sikrer rækkefølgen: en hurtig update/delete på en netop oprettet række
+   sendes først, når dens INSERT er bekræftet. */
+const PENDING = new Map();
+const pendIns = (id, q) => { const p = dbTry(q).finally(() => PENDING.delete(id)); PENDING.set(id, p); };
+const afterIns = (id, run) => { const p = PENDING.get(id); if (p) p.then(run); else run(); };
+const newId = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : locId();
 const DB = {
-  async addMilestone(tid, ms) {
+  addMilestone(tid, ms) {
     if (!sb) { ms.id = locId(); return true; }
-    const d = await dbTry(sb.from('plan_milestones').insert({ track_id:tid, m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner, status:ms.status || 'todo' }).select().single());
-    if (!d) return false;
-    ms.id = d.id;
+    ms.id = newId();
+    pendIns(ms.id, sb.from('plan_milestones').insert({ id:ms.id, track_id:tid, m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner, status:ms.status || 'todo' }));
     return true;
   },
-  updMilestone(ms) { if (sb) dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner, status:ms.status || 'todo' }).eq('id', ms.id)); },
-  delMilestone(id) { if (sb) dbTry(sb.from('plan_milestones').delete().eq('id', id)); },
-  updTrack(t) { if (sb) dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, sort:(t.sort == null ? null : t.sort), fee_onetime:(t.feeOnce == null ? null : t.feeOnce), fee_recurring:(t.feeRec == null ? null : t.feeRec), fee_extra:(t.feeExtra == null ? null : t.feeExtra), fee_extra_label:(t.feeExtraLabel || null), category:(t.category || null) }).eq('id', t.id)); },
-  async addTrack(t) {
-    if (!sb) return true;
-    const d = await dbTry(sb.from('plan_tracks').insert({ id:t.id, name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, ongoing:t.ongoing, baseline:t.baseline, sort:t.sort, category:(t.category || null) }).select().single());
-    return !!d;
+  updMilestone(ms) { if (sb) afterIns(ms.id, () => dbTry(sb.from('plan_milestones').update({ m:ms.m, from_m:ms.from, label:ms.label, owner:ms.owner, status:ms.status || 'todo' }).eq('id', ms.id))); },
+  delMilestone(id) { if (sb) afterIns(id, () => dbTry(sb.from('plan_milestones').delete().eq('id', id))); },
+  updTrack(t) { if (sb) afterIns(t.id, () => dbTry(sb.from('plan_tracks').update({ name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, sort:(t.sort == null ? null : t.sort), fee_onetime:(t.feeOnce == null ? null : t.feeOnce), fee_recurring:(t.feeRec == null ? null : t.feeRec), fee_extra:(t.feeExtra == null ? null : t.feeExtra), fee_extra_label:(t.feeExtraLabel || null), category:(t.category || null) }).eq('id', t.id))); },
+  addTrack(t) {
+    if (sb) pendIns(t.id, sb.from('plan_tracks').insert({ id:t.id, name:t.name, owner:t.owner, color:t.color, from_m:t.from, solid_to:t.solidTo, to_m:t.to, ongoing:t.ongoing, baseline:t.baseline, sort:t.sort, category:(t.category || null) }));
+    return true;
   },
-  delTrack(id) { if (sb) dbTry(sb.from('plan_tracks').delete().eq('id', id)); },
-  async addAlloc(a) {
+  delTrack(id) { if (sb) afterIns(id, () => dbTry(sb.from('plan_tracks').delete().eq('id', id))); },
+  addAlloc(a) {
     if (!sb) { a.id = locId(); return true; }
+    a.id = newId();
     const per = allocPeriod(a);
-    const d = await dbTry(sb.from('plan_allocations').insert({ person_id:a.p || null, dept:a.dept || null, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).select().single());
-    if (!d) return false;
-    a.id = d.id;
+    pendIns(a.id, sb.from('plan_allocations').insert({ id:a.id, person_id:a.p || null, dept:a.dept || null, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }));
     return true;
   },
-  updAlloc(a) { if (sb) { const per = allocPeriod(a); dbTry(sb.from('plan_allocations').update({ person_id:a.p || null, dept:a.dept || null, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).eq('id', a.id)); } },
-  delAlloc(id) { if (sb) dbTry(sb.from('plan_allocations').delete().eq('id', id)); },
-  async addDep(d0) {
+  updAlloc(a) { if (sb) { const per = allocPeriod(a); afterIns(a.id, () => dbTry(sb.from('plan_allocations').update({ person_id:a.p || null, dept:a.dept || null, track_id:a.t, from_m:per.from, to_m:per.to, pct:a.pct, milestone_id:a.msId || null }).eq('id', a.id))); } },
+  delAlloc(id) { if (sb) afterIns(id, () => dbTry(sb.from('plan_allocations').delete().eq('id', id))); },
+  addDep(d0) {
     if (!sb) { d0.id = locId(); return true; }
-    const d = await dbTry(sb.from('plan_dependencies').insert({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs, dep_type:d0.type || 'start' }).select().single());
-    if (!d) return false;
-    d0.id = d.id;
+    d0.id = newId();
+    pendIns(d0.id, sb.from('plan_dependencies').insert({ id:d0.id, from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs, dep_type:d0.type || 'start' }));
     return true;
   },
-  updDep(d0) { if (sb) dbTry(sb.from('plan_dependencies').update({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs, dep_type:d0.type || 'start' }).eq('id', d0.id)); },
-  delDep(id) { if (sb) dbTry(sb.from('plan_dependencies').delete().eq('id', id)); },
-  async addSubtask(s) {
+  updDep(d0) { if (sb) afterIns(d0.id, () => dbTry(sb.from('plan_dependencies').update({ from_ms:d0.fromMs, to_track:d0.toT, to_ms:d0.toMs, dep_type:d0.type || 'start' }).eq('id', d0.id))); },
+  delDep(id) { if (sb) afterIns(id, () => dbTry(sb.from('plan_dependencies').delete().eq('id', id))); },
+  addSubtask(s) {
     if (!sb) { s.id = locId(); return true; }
-    const d = await dbTry(sb.from('plan_subtasks').insert({ milestone_id:s.msId, label:s.label, person_id:s.p || null, hours:s.hours, status:s.status || 'todo', done:(s.status === 'faerdig'), due_date:s.due || null }).select().single());
-    if (!d) return false;
-    s.id = d.id;
+    s.id = newId();
+    pendIns(s.id, sb.from('plan_subtasks').insert({ id:s.id, milestone_id:s.msId, label:s.label, person_id:s.p || null, hours:s.hours, status:s.status || 'todo', done:(s.status === 'faerdig'), due_date:s.due || null }));
     return true;
   },
-  updSubtask(s) { if (sb) dbTry(sb.from('plan_subtasks').update({ label:s.label, person_id:s.p || null, hours:s.hours, status:s.status || 'todo', done:(s.status === 'faerdig'), due_date:s.due || null }).eq('id', s.id)); },
-  delSubtask(id) { if (sb) dbTry(sb.from('plan_subtasks').delete().eq('id', id)); },
-  async addPerson(p) {
-    if (!sb) return true;
-    const d = await dbTry(sb.from('plan_people').insert({ id:p.id, name:p.name, role:p.role || '', sort:p.sort, department:p.dept || '' }).select().single());
-    return !!d;
+  updSubtask(s) { if (sb) afterIns(s.id, () => dbTry(sb.from('plan_subtasks').update({ label:s.label, person_id:s.p || null, hours:s.hours, status:s.status || 'todo', done:(s.status === 'faerdig'), due_date:s.due || null }).eq('id', s.id))); },
+  delSubtask(id) { if (sb) afterIns(id, () => dbTry(sb.from('plan_subtasks').delete().eq('id', id))); },
+  addPerson(p) {
+    if (sb) pendIns(p.id, sb.from('plan_people').insert({ id:p.id, name:p.name, role:p.role || '', sort:p.sort, department:p.dept || '' }));
+    return true;
   },
-  updPerson(p) { if (sb) dbTry(sb.from('plan_people').update({ name:p.name, role:p.role || '', department:p.dept || '' }).eq('id', p.id)); },
+  updPerson(p) { if (sb) afterIns(p.id, () => dbTry(sb.from('plan_people').update({ name:p.name, role:p.role || '', department:p.dept || '' }).eq('id', p.id))); },
   addDeptIfNew(name) {
     if (!name || DEPTS.includes(name)) return;
     DEPTS.push(name);
     if (sb) dbTry(sb.from('plan_departments').insert({ name, sort: DEPTS.length }));
   },
-  delPerson(id) { if (sb) dbTry(sb.from('plan_people').delete().eq('id', id)); },
+  delPerson(id) { if (sb) afterIns(id, () => dbTry(sb.from('plan_people').delete().eq('id', id))); },
 };
 function subscribeRealtime() {
   if (!sb) return;
   let t;
-  /* Genbyg ikke editorerne mens en ejer-popup er åben — det ville lukke den midt i valget */
-  const reload = () => { clearTimeout(t); t = setTimeout(async () => { await loadAll(); refresh(!document.querySelector('details.owner-pick[open]')); }, 350); };
+  /* Genbyg ikke UI'et mens brugeren står i et felt eller har en ejer-popup åben — det ville
+     smide fokus og indtastning væk. Timeren armes blot igen (uden netværkskald), så kollegers
+     ændringer lander i samme øjeblik feltet forlades. */
+  const reload = () => { clearTimeout(t); t = setTimeout(async () => {
+    if (editingNow()) { reload(); return; }
+    await loadAll();
+    refresh(true);
+  }, 350); };
   const ch = sb.channel('plan-sync');
-  ['plan_people','plan_tracks','plan_milestones','plan_allocations','plan_dependencies','plan_changelog','plan_subtasks','plan_departments']
+  /* plan_changelog er bevidst udeladt: dens trigger-række følger ALTID en ændring i en af de
+     andre tabeller, så et abonnement her ville blot fordoble antallet af reloads pr. redigering
+     (loggen genindlæses alligevel i loadAll) */
+  ['plan_people','plan_tracks','plan_milestones','plan_allocations','plan_dependencies','plan_subtasks','plan_departments']
     .forEach(tb => ch.on('postgres_changes', { event:'*', schema:'public', table:tb }, reload));
   ch.subscribe();
 }
@@ -633,14 +663,15 @@ function frozenHead(id, outer, innerW, headH, labelsHtml) {
     }
   };
   el._sync();
-  /* scroll-events er ikke pålidelige alle steder — en let rAF-løkke holder headerne i sync
-     (skriver kun til DOM når noget faktisk har ændret sig) */
+  /* Event-drevet sync (scroll bobler ikke, men kan fanges i capture-fasen — det dækker også
+     vandret scroll inde i containerne). Intervallet er et let sikkerhedsnet de steder,
+     hvor scroll-events udebliver. Ingen evig rAF-løkke: den kostede CPU døgnet rundt. */
   if (!window.__fhLoop) {
     window.__fhLoop = true;
     const syncAll = () => (window.__fhEls || []).forEach(f => f._sync && f._sync());
-    const tick = () => { syncAll(); requestAnimationFrame(tick); };
-    requestAnimationFrame(tick);
-    setInterval(syncAll, 200); /* fallback hvor rAF er sat på pause */
+    document.addEventListener('scroll', syncAll, { capture: true, passive: true });
+    addEventListener('resize', syncAll);
+    setInterval(syncAll, 200);
   }
 }
 function visibleTracks() {
@@ -931,20 +962,8 @@ function renderMsEditor() {
     if (cur.length) return cur.map(a => `${allocName(a)} ${a.pct}%`).join(', ');
     return ms.owner ? esc(ms.owner) + ' (uden %)' : '– (ingen endnu)';
   };
-  const allocPick = ms => {
-    const cur = msAllocs(ms);
-    const rows = personRowsGrouped(p => {
-      const a = cur.find(x => x.p === p.id);
-      return `<label><input type="checkbox" data-mac="${ms.id}:${p.id}" ${a?'checked':''}><span>${esc(personDisp(p))}</span>
-        <input type="number" min="0" max="150" step="5" value="${a?a.pct:20}" data-map="${ms.id}:${p.id}" ${a?'':'disabled'}> %</label>`;
-    }, d => {
-      /* afdelings-overskriften er selv valgbar: allokér hele afdelingen med én procent */
-      const a = cur.find(x => x.dept === d);
-      return `<label style="font-size:10.5px;color:var(--text-muted);margin:6px 0 1px;text-transform:uppercase;letter-spacing:.4px;"><input type="checkbox" data-macd="${ms.id}:${esc(d)}" ${a?'checked':''}><span>${esc(d)}</span>
-        <input type="number" min="0" max="300" step="5" value="${a?a.pct:20}" data-mapd="${ms.id}:${esc(d)}" ${a?'':'disabled'}> %</label>`;
-    });
-    return `<details class="owner-pick"><summary>${allocSummary(ms)}</summary><div class="panel">${rows}</div></details>`;
-  };
+  /* panelet er tomt her — det bygges først (med frisk indhold), når popup'en åbnes; se fillPick */
+  const allocPick = ms => `<details class="owner-pick" data-oppick="${ms.id}"><summary>${allocSummary(ms)}</summary><div class="panel"></div></details>`;
   /* Grupperet pr. spor: fold et spor ud for at se/redigere dets opgaver.
      Åben/lukket-tilstand huskes hen over genopbygninger (openMsGroups). */
   let html = '';
@@ -978,7 +997,9 @@ function renderMsEditor() {
     else if (f === 'label') ms.label = el.value || 'Punkt';
     else ms.owner = el.value;
     DB.updMilestone(ms);
-    refresh(true);
+    /* refresh(false): editorerne genopbygges IKKE midt i indtastningen (det ville stjæle
+       fokus/klik) — realtime-reloaden samler op, når brugeren har forladt feltet */
+    refresh(false);
   }));
   const syncMsOwner = ms => {
     ms.owner = msAllocs(ms).map(a => allocName(a)).join(', ');
@@ -989,63 +1010,88 @@ function renderMsEditor() {
     el.closest('details.owner-pick').querySelector('summary').textContent =
       msAllocs(ms).length ? msAllocs(ms).map(a => `${allocName(a)} ${a.pct}%`).join(', ') : '– (ingen endnu)';
   };
-  $('#msEditor').querySelectorAll('[data-mac]').forEach(cb => cb.addEventListener('change', async () => {
-    const [msId, pid] = cb.dataset.mac.split(':');
+  /* Person-vælgeren bygges først, når popup'en åbnes — og altid med frisk indhold.
+     Før blev ~100 skjulte paneler med et par tusind kontroller bygget ved HVER genopbygning
+     af editoren; det var en af de store kilder til hak i UI'et. */
+  const wirePick = (panel, msId) => {
+    panel.querySelectorAll('[data-mac]').forEach(cb => cb.addEventListener('change', async () => {
+      const pid = cb.dataset.mac.split(':')[1];
+      const found = findMs(msId); if (!found) return;
+      const ms = found.ms;
+      const pctInput = panel.querySelector(`[data-map="${msId}:${pid}"]`);
+      if (cb.checked) {
+        const a = { p: pid, t: found.t.id, msId: msId, from: ms.from, to: ms.m, pct: Number(pctInput.value) || 20 };
+        if (!(await DB.addAlloc(a))) { cb.checked = false; return; }
+        ALLOC.push(a);
+        pctInput.disabled = false;
+      } else {
+        const a = ALLOC.find(x => x.msId === msId && x.p === pid);
+        if (a) { DB.delAlloc(a.id); ALLOC = ALLOC.filter(x => x !== a); }
+        pctInput.disabled = true;
+      }
+      syncMsOwner(ms);
+      updSummary(cb, ms);
+      refresh(false);
+    }));
+    panel.querySelectorAll('[data-map]').forEach(inp => inp.addEventListener('change', () => {
+      const pid = inp.dataset.map.split(':')[1];
+      const a = ALLOC.find(x => x.msId === msId && x.p === pid); if (!a) return;
+      a.pct = Number(inp.value) || 0;
+      DB.updAlloc(a);
+      const found = findMs(msId);
+      if (found) { syncMsOwner(found.ms); updSummary(inp, found.ms); }
+      refresh(false);
+    }));
+    panel.querySelectorAll('[data-macd]').forEach(cb => cb.addEventListener('change', async () => {
+      const v = cb.dataset.macd, ci = v.indexOf(':');
+      const d = v.slice(ci + 1); /* afdelingsnavne kan indeholde ':' — split ved FØRSTE kolon */
+      const found = findMs(msId); if (!found) return;
+      const ms = found.ms;
+      const pctInput = [...panel.querySelectorAll('[data-mapd]')].find(x => x.dataset.mapd === v);
+      if (cb.checked) {
+        const a = { p: null, dept: d, t: found.t.id, msId: msId, from: ms.from, to: ms.m, pct: Number(pctInput && pctInput.value) || 20 };
+        if (!(await DB.addAlloc(a))) { cb.checked = false; return; }
+        ALLOC.push(a);
+        if (pctInput) pctInput.disabled = false;
+      } else {
+        const a = ALLOC.find(x => x.msId === msId && x.dept === d);
+        if (a) { DB.delAlloc(a.id); ALLOC = ALLOC.filter(x => x !== a); }
+        if (pctInput) pctInput.disabled = true;
+      }
+      syncMsOwner(ms);
+      updSummary(cb, ms);
+      refresh(false);
+    }));
+    panel.querySelectorAll('[data-mapd]').forEach(inp => inp.addEventListener('change', () => {
+      const v = inp.dataset.mapd, ci = v.indexOf(':');
+      const d = v.slice(ci + 1);
+      const a = ALLOC.find(x => x.msId === msId && x.dept === d); if (!a) return;
+      a.pct = Number(inp.value) || 0;
+      DB.updAlloc(a);
+      const found = findMs(msId);
+      if (found) { syncMsOwner(found.ms); updSummary(inp, found.ms); }
+      refresh(false);
+    }));
+  };
+  const fillPick = det => {
+    const msId = det.dataset.oppick;
     const found = findMs(msId); if (!found) return;
-    const ms = found.ms;
-    const pctInput = $('#msEditor').querySelector(`[data-map="${msId}:${pid}"]`);
-    if (cb.checked) {
-      const a = { p: pid, t: found.t.id, msId: msId, from: ms.from, to: ms.m, pct: Number(pctInput.value) || 20 };
-      if (!(await DB.addAlloc(a))) { cb.checked = false; return; }
-      ALLOC.push(a);
-      pctInput.disabled = false;
-    } else {
-      const a = ALLOC.find(x => x.msId === msId && x.p === pid);
-      if (a) { DB.delAlloc(a.id); ALLOC = ALLOC.filter(x => x !== a); }
-      pctInput.disabled = true;
-    }
-    syncMsOwner(ms);
-    updSummary(cb, ms);
-    refresh(false);
-  }));
-  $('#msEditor').querySelectorAll('[data-map]').forEach(inp => inp.addEventListener('change', () => {
-    const [msId, pid] = inp.dataset.map.split(':');
-    const a = ALLOC.find(x => x.msId === msId && x.p === pid); if (!a) return;
-    a.pct = Number(inp.value) || 0;
-    DB.updAlloc(a);
-    const found = findMs(msId);
-    if (found) { syncMsOwner(found.ms); updSummary(inp, found.ms); }
-    refresh(false);
-  }));
-  $('#msEditor').querySelectorAll('[data-macd]').forEach(cb => cb.addEventListener('change', async () => {
-    const v = cb.dataset.macd, ci = v.indexOf(':');
-    const msId = v.slice(0, ci), d = v.slice(ci + 1); /* afdelingsnavne kan indeholde ':' — split ved FØRSTE kolon */
-    const found = findMs(msId); if (!found) return;
-    const ms = found.ms;
-    const pctInput = [...$('#msEditor').querySelectorAll('[data-mapd]')].find(x => x.dataset.mapd === v);
-    if (cb.checked) {
-      const a = { p: null, dept: d, t: found.t.id, msId: msId, from: ms.from, to: ms.m, pct: Number(pctInput && pctInput.value) || 20 };
-      if (!(await DB.addAlloc(a))) { cb.checked = false; return; }
-      ALLOC.push(a);
-      if (pctInput) pctInput.disabled = false;
-    } else {
-      const a = ALLOC.find(x => x.msId === msId && x.dept === d);
-      if (a) { DB.delAlloc(a.id); ALLOC = ALLOC.filter(x => x !== a); }
-      if (pctInput) pctInput.disabled = true;
-    }
-    syncMsOwner(ms);
-    updSummary(cb, ms);
-    refresh(false);
-  }));
-  $('#msEditor').querySelectorAll('[data-mapd]').forEach(inp => inp.addEventListener('change', () => {
-    const v = inp.dataset.mapd, ci = v.indexOf(':');
-    const msId = v.slice(0, ci), d = v.slice(ci + 1);
-    const a = ALLOC.find(x => x.msId === msId && x.dept === d); if (!a) return;
-    a.pct = Number(inp.value) || 0;
-    DB.updAlloc(a);
-    const found = findMs(msId);
-    if (found) { syncMsOwner(found.ms); updSummary(inp, found.ms); }
-    refresh(false);
+    const cur = msAllocs(found.ms);
+    const panel = det.querySelector('.panel');
+    panel.innerHTML = personRowsGrouped(p => {
+      const a = cur.find(x => x.p === p.id);
+      return `<label><input type="checkbox" data-mac="${msId}:${p.id}" ${a?'checked':''}><span>${esc(personDisp(p))}</span>
+        <input type="number" min="0" max="150" step="5" value="${a?a.pct:20}" data-map="${msId}:${p.id}" ${a?'':'disabled'}> %</label>`;
+    }, d => {
+      /* afdelings-overskriften er selv valgbar: allokér hele afdelingen med én procent */
+      const a = cur.find(x => x.dept === d);
+      return `<label style="font-size:10.5px;color:var(--text-muted);margin:6px 0 1px;text-transform:uppercase;letter-spacing:.4px;"><input type="checkbox" data-macd="${msId}:${esc(d)}" ${a?'checked':''}><span>${esc(d)}</span>
+        <input type="number" min="0" max="300" step="5" value="${a?a.pct:20}" data-mapd="${msId}:${esc(d)}" ${a?'':'disabled'}> %</label>`;
+    });
+    wirePick(panel, msId);
+  };
+  $('#msEditor').querySelectorAll('details.owner-pick').forEach(det => det.addEventListener('toggle', () => {
+    if (det.open) fillPick(det); else det.querySelector('.panel').innerHTML = '';
   }));
   $('#msEditor').querySelectorAll('[data-mdel]').forEach(el => el.addEventListener('click', () => {
     const id = el.dataset.mdel;
@@ -1100,7 +1146,7 @@ function renderTrackEditor() {
     /* løbende spor vises horisonten ud; afsluttede spor slutter ved 'Til' */
     t.to = t.ongoing ? Math.max(t.to, t.solidTo) : t.solidTo;
     DB.updTrack(t);
-    refresh(true);
+    refresh(false); /* feltværdien står allerede i inputtet — genopbygning ville stjæle fokus */
   }));
   /* ▲▼: byt plads med nabo-sporet (kun ikke-basisdrift; basisdrift ligger altid nederst) */
   const moveTrack = (id, dir) => {
@@ -1264,7 +1310,7 @@ function renderDepEditor() {
     else if (el.value.startsWith('start:')) { d.toT = el.value.slice(6); d.toMs = null; }
     else { const msId = el.value.slice(3); const f = findMs(msId); if (f) { d.toT = f.t.id; d.toMs = msId; } }
     DB.updDep(d);
-    refresh(true);
+    refresh(false); /* status-kolonnen samles op ved næste genopbygning — fokus bevares */
   }));
   $('#depEditor').querySelectorAll('[data-ddel]').forEach(el => el.addEventListener('click', () => {
     const id = el.dataset.ddel;
@@ -1722,7 +1768,7 @@ function openFeeEdit(tid, x, y) {
 }
 
 /* ================== VISNINGER (Overblik / Tidslinje / Spor-detalje) ================== */
-function setView(v) {
+function setView(v, skipRender) {
   state.view = v === 'detalje' ? 'detalje' : v === 'overblik' ? 'overblik' : 'tidslinje';
   document.querySelectorAll('.view-ov').forEach(el => el.style.display = state.view === 'tidslinje' ? '' : 'none');
   const dp = $('#detailPage'); if (dp) dp.style.display = state.view === 'detalje' ? '' : 'none';
@@ -1734,11 +1780,13 @@ function setView(v) {
       state.detailTrack = first ? first.id : '';
       fillDetailTrackSel();
     }
-    renderDetail();
+    if (!skipRender) renderDetail();
   } else if (state.view === 'overblik') {
-    renderOverblik(); /* re-render med korrekt bredde efter at have været skjult */
+    if (!skipRender) renderOverblik(); /* re-render med korrekt bredde efter at have været skjult */
   } else {
-    refresh(false); /* gantt-bredden skal genberegnes efter at have været skjult */
+    /* bredden skal genberegnes efter at have været skjult, og editorerne kan have
+       sprunget genopbygninger over, mens en anden visning var aktiv */
+    if (!skipRender) refresh(true);
   }
   /* skjul frosne headers fra den visning man forlader */
   ['fh-gantt', 'fh-ovz'].forEach(id => { const fh = document.getElementById(id); if (fh && fh._sync) fh._sync(); });
@@ -1752,16 +1800,16 @@ function updateViewHash() {
     : location.pathname + location.search;
   history.replaceState(null, '', h);
 }
-function applyViewHash() {
+function applyViewHash(skipRender) {
   const m = location.hash.match(/^#detalje(?:\/(.+))?$/);
   if (m) {
     const tid = m[1] ? decodeURIComponent(m[1]) : '';
     if (tid && trackById(tid)) { state.detailTrack = tid; fillDetailTrackSel(); }
-    setView('detalje');
+    setView('detalje', skipRender);
   } else if (location.hash === '#overblik') {
-    setView('overblik');
+    setView('overblik', skipRender);
   } else {
-    setView('tidslinje');
+    setView('tidslinje', skipRender);
   }
 }
 
@@ -1807,7 +1855,7 @@ function renderPeopleEditor() {
     else if (f === 'dept') { p.dept = inp.value.trim(); DB.addDeptIfNew(p.dept); }
     else p.role = inp.value.trim();
     DB.updPerson(p);
-    refresh(true);
+    refresh(false); /* feltværdien står allerede i inputtet — genopbygning ville stjæle fokus */
   }));
   el.querySelectorAll('[data-pdel]').forEach(btn => btn.addEventListener('click', () => {
     const p = personById(btn.dataset.pdel); if (!p) return;
@@ -1880,23 +1928,23 @@ function openMsQuickEdit(msId, x, y) {
     m2.owner = ALLOC.filter(a => a.msId === m2.id).map(a => allocName(a)).join(', ');
   };
   $('#qeClose').addEventListener('click', closeMsQuickEdit);
-  $('#qeLabel').addEventListener('change', e => { const m2 = liveMs(); if (!m2) return; m2.label = e.target.value || 'Punkt'; DB.updMilestone(m2); refresh(true); });
+  $('#qeLabel').addEventListener('change', e => { const m2 = liveMs(); if (!m2) return; m2.label = e.target.value || 'Punkt'; DB.updMilestone(m2); refresh(false); });
   $('#qeFrom').addEventListener('change', e => {
     const m2 = liveMs(); if (!m2) return;
     m2.from = Number(e.target.value); if (m2.from > m2.m) { m2.m = m2.from; $('#qeM').value = String(m2.m); }
-    DB.updMilestone(m2); refresh(true);
+    DB.updMilestone(m2); refresh(false);
   });
   $('#qeM').addEventListener('change', e => {
     const m2 = liveMs(); if (!m2) return;
     m2.m = Number(e.target.value); if (m2.from > m2.m) { m2.from = m2.m; $('#qeFrom').value = String(m2.from); }
-    DB.updMilestone(m2); refresh(true);
+    DB.updMilestone(m2); refresh(false);
   });
   $('#qeStatus').addEventListener('change', e => {
     const m2 = liveMs(); if (!m2) return;
     m2.status = e.target.value;
     const s2 = STATUS[m2.status] || STATUS.todo;
     e.target.style.borderColor = s2.color; e.target.style.color = s2.color;
-    DB.updMilestone(m2); refresh(true);
+    DB.updMilestone(m2); refresh(false);
   });
   qe.querySelectorAll('[data-qep]').forEach(cb => cb.addEventListener('change', async () => {
     const m2 = liveMs(); if (!m2) return;
@@ -1914,7 +1962,7 @@ function openMsQuickEdit(msId, x, y) {
     }
     syncOwner(m2);
     DB.updMilestone(m2);
-    refresh(true);
+    refresh(false);
   }));
   qe.querySelectorAll('[data-qepct]').forEach(inp => inp.addEventListener('change', () => {
     const m2 = liveMs(); if (!m2) return;
@@ -1923,7 +1971,7 @@ function openMsQuickEdit(msId, x, y) {
     DB.updAlloc(a);
     syncOwner(m2);
     DB.updMilestone(m2);
-    refresh(true);
+    refresh(false);
   }));
   qe.querySelectorAll('[data-qepd]').forEach(cb => cb.addEventListener('change', async () => {
     const m2 = liveMs(); if (!m2) return;
@@ -1941,7 +1989,7 @@ function openMsQuickEdit(msId, x, y) {
     }
     syncOwner(m2);
     DB.updMilestone(m2);
-    refresh(true);
+    refresh(false);
   }));
   qe.querySelectorAll('[data-qepctd]').forEach(inp => inp.addEventListener('change', () => {
     const m2 = liveMs(); if (!m2) return;
@@ -1950,7 +1998,7 @@ function openMsQuickEdit(msId, x, y) {
     DB.updAlloc(a);
     syncOwner(m2);
     DB.updMilestone(m2);
-    refresh(true);
+    refresh(false);
   }));
   $('#qeDetail').addEventListener('click', e => {
     e.preventDefault();
@@ -1987,7 +2035,11 @@ function initControls() {
     setTimeout(() => $('#exportBtn').textContent = 'Kopiér data (JSON)', 1800);
   });
   $('#logoutBtn').addEventListener('click', async () => { if (sb) await sb.auth.signOut(); location.reload(); });
-  addEventListener('resize', () => { if (state.view === 'overblik') renderOverblik(); else renderGantt(); });
+  /* debounced: en vinduesstørrelse-ændring affyrer mange resize-events i træk */
+  let rzT;
+  addEventListener('resize', () => { clearTimeout(rzT); rzT = setTimeout(() => {
+    if (state.view === 'overblik') renderOverblik(); else if (state.view !== 'detalje') renderGantt();
+  }, 100); });
   if (matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => refresh(false));
 }
 function refresh(rebuildEditors) {
@@ -1997,31 +2049,36 @@ function refresh(rebuildEditors) {
     if (qe.dataset.ms && !findMs(qe.dataset.ms)) closeMsQuickEdit();
     else if (qe.dataset.track && !trackById(qe.dataset.track)) closeMsQuickEdit();
   }
-  renderGantt();
-  renderHeat();
-  renderWarnings();
-  if (rebuildEditors) { renderTrackEditor(); renderMsEditor(); renderAllocEditor(); renderPeopleEditor(); fillDetailTrackSel(); fillFilters(); }
-  renderDepEditor(); /* status-kolonnen kan ændre sig ved alle redigeringer */
-  renderChangelog();
-  renderDetail(); /* altid — viser data der ændres fra andre editorer; springer selv over ved aktiv indtastning */
-  renderOverblik();
+  /* kun den synlige visning gentegnes — setView gentegner selv, når der skiftes fane.
+     Før blev alle tre visninger (inkl. de skjulte) bygget om ved hver eneste ændring. */
+  if (state.view === 'detalje') {
+    if (rebuildEditors) fillDetailTrackSel();
+    renderDetail(); /* springer selv over ved aktiv indtastning */
+  } else if (state.view === 'overblik') {
+    renderOverblik();
+  } else {
+    renderGantt();
+    renderHeat();
+    renderWarnings();
+    if (rebuildEditors) {
+      renderTrackEditor(); renderMsEditor(); renderAllocEditor(); renderPeopleEditor();
+      fillDetailTrackSel(); fillFilters();
+      renderDepEditor(); /* genbygges sammen med de øvrige editorer; status-kolonnen samles op her */
+    }
+    renderChangelog();
+  }
 }
 function startUI() {
-  fillFilters();
   document.addEventListener('click', e => {
     document.querySelectorAll('details.owner-pick[open]').forEach(d => { if (!d.contains(e.target)) d.removeAttribute('open'); });
     const qe = $('#msQuickEdit');
     if (qe && qe.style.display !== 'none' && !qe.contains(e.target) && !e.target.closest('[data-ms]')) closeMsQuickEdit();
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMsQuickEdit(); });
-  renderTrackEditor();
-  renderMsEditor();
-  renderAllocEditor();
-  renderPeopleEditor();
-  fillDetailTrackSel();
-  renderDetail();
-  refresh(false);
-  applyViewHash(); /* åbn direkte i Spor-detalje hvis URL'en peger derhen */
+  /* vælg visning ud fra URL'en FØR første render — så tegnes alt præcis én gang
+     (før blev hele UI'et bygget to gange oven i hinanden ved opstart) */
+  applyViewHash(true);
+  refresh(true);
 }
 async function boot() {
   if (booted) return; booted = true;
@@ -2058,7 +2115,8 @@ async function init() {
   const { data: { session } } = await sb.auth.getSession();
   if (session) { await boot(); } else showLogin();
 }
-init();
+/* supabase-js indlæses med defer og er garanteret klar ved DOMContentLoaded */
+document.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
 </html>
