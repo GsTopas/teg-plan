@@ -602,6 +602,47 @@ function hideTT(){ tt.style.display = 'none'; }
 
 /* ================== GANTT ================== */
 const G = { labelW: 250, headH: 44 };
+/* Frossen akse-header: en fixed kopi af kvartal-/måneds-etiketterne vises øverst i vinduet,
+   når selve aksen er scrollet ud af billedet — og følger med ved vandret scroll. */
+function frozenHead(id, outer, innerW, headH, labelsHtml) {
+  let el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = id;
+    el.style.cssText = 'position:fixed;top:0;display:none;z-index:40;overflow:hidden;background:var(--surface-1);border-bottom:1px solid var(--border);box-shadow:0 3px 10px rgba(0,0,0,.25);';
+    el.innerHTML = '<div style="position:relative;height:100%;"></div>';
+    document.body.appendChild(el);
+    (window.__fhEls = window.__fhEls || []).push(el);
+  }
+  const inner = el.firstElementChild;
+  el.style.height = headH + 'px';
+  inner.style.width = innerW + 'px';
+  inner.style.height = headH + 'px';
+  inner.innerHTML = labelsHtml;
+  el._sync = () => {
+    const r = outer.getBoundingClientRect();
+    /* vis kun når aksen er over vinduets kant, og der stadig er indhold under headeren */
+    const show = r.width > 0 && r.top < -6 && r.bottom > headH + 60;
+    const disp = show ? 'block' : 'none';
+    if (el.style.display !== disp) el.style.display = disp;
+    if (show) {
+      const left = r.left + 'px', width = outer.clientWidth + 'px', tx = 'translateX(' + (-outer.scrollLeft) + 'px)';
+      if (el.style.left !== left) el.style.left = left;
+      if (el.style.width !== width) el.style.width = width;
+      if (inner.style.transform !== tx) inner.style.transform = tx;
+    }
+  };
+  el._sync();
+  /* scroll-events er ikke pålidelige alle steder — en let rAF-løkke holder headerne i sync
+     (skriver kun til DOM når noget faktisk har ændret sig) */
+  if (!window.__fhLoop) {
+    window.__fhLoop = true;
+    const syncAll = () => (window.__fhEls || []).forEach(f => f._sync && f._sync());
+    const tick = () => { syncAll(); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+    setInterval(syncAll, 200); /* fallback hvor rAF er sat på pause */
+  }
+}
 function visibleTracks() {
   const key = t => {
     if (t.baseline) return [1, 99, 99];
@@ -646,13 +687,14 @@ function renderGantt() {
   cont.style.width = W + 'px';
   cont.style.height = H + 'px';
 
-  let html = '';
+  let headHtml = '';
   QUARTERS.forEach(q => {
-    html += `<div style="position:absolute;left:${G.labelW + q.start*colW}px;top:0;width:${q.len*colW}px;height:16px;font-size:11px;color:var(--text-muted);text-align:center;">${q.q}</div>`;
+    headHtml += `<div style="position:absolute;left:${G.labelW + q.start*colW}px;top:0;width:${q.len*colW}px;height:16px;font-size:11px;color:var(--text-muted);text-align:center;">${q.q}</div>`;
   });
   MONTHS.forEach((mo,i) => {
-    html += `<div style="position:absolute;left:${G.labelW + i*colW}px;top:18px;width:${colW}px;font-size:10.5px;color:var(--text-muted);text-align:center;">${mo.label}</div>`;
+    headHtml += `<div style="position:absolute;left:${G.labelW + i*colW}px;top:18px;width:${colW}px;font-size:10.5px;color:var(--text-muted);text-align:center;">${mo.label}</div>`;
   });
+  let html = headHtml;
   for (let i = 0; i <= MONTHS.length; i++) {
     const isQ = i % 3 === 0;
     html += `<div style="position:absolute;left:${G.labelW + i*colW}px;top:${G.headH-8}px;bottom:0;width:1px;background:${isQ?'var(--axis)':'var(--grid)'};"></div>`;
@@ -741,6 +783,7 @@ function renderGantt() {
       </defs>${paths}</svg>`;
   }
   cont.innerHTML = html;
+  frozenHead('fh-gantt', $('#gantt-outer'), W, 34, headHtml);
 
   cont.querySelectorAll('[data-ms]').forEach(el => {
     const found = findMs(el.dataset.ms);
@@ -1516,10 +1559,11 @@ function renderOverblik() {
   cont.style.height = H + 'px';
   const qLabels = [];
   { let y = 2026, q = 3; for (let i = 0; i < 8; i++) { qLabels.push('Q' + q + ' ' + y); q++; if (q > 4) { q = 1; y++; } } }
-  let html = '';
+  let headHtml = '';
   qLabels.forEach((lbl, i) => {
-    html += `<div style="position:absolute;left:${G.labelW + i*3*colW}px;top:8px;width:${3*colW}px;font-size:11.5px;color:var(--text-muted);text-align:center;">${lbl}</div>`;
+    headHtml += `<div style="position:absolute;left:${G.labelW + i*3*colW}px;top:8px;width:${3*colW}px;font-size:11.5px;color:var(--text-muted);text-align:center;">${lbl}</div>`;
   });
+  let html = headHtml;
   for (let i = 0; i <= 8; i++) {
     html += `<div style="position:absolute;left:${G.labelW + i*3*colW}px;top:${G.headH-8}px;bottom:30px;width:1px;background:var(--grid);"></div>`;
   }
@@ -1623,6 +1667,7 @@ function renderOverblik() {
   const sumRec = TRACKS.reduce((s, t) => s + (t.feeRec || 0) + (t.feeExtra || 0), 0);
   html += `<div style="position:absolute;left:0;top:${H-22}px;font-size:12px;color:var(--text-secondary);"><b>Samlet:</b> ${fmtDKK(sumOnce)} one-time · ${fmtDKK(sumRec)}/år recurring</div>`;
   cont.innerHTML = html;
+  frozenHead('fh-ovz', $('#ovz-outer'), W, 30, headHtml);
   cont.querySelectorAll('[data-ovms]').forEach(el => {
     const f = findMs(el.dataset.ovms); if (!f) return;
     const tt = `<div class="tt-title">◆ ${esc(f.ms.label)}</div>
@@ -1695,6 +1740,8 @@ function setView(v) {
   } else {
     refresh(false); /* gantt-bredden skal genberegnes efter at have været skjult */
   }
+  /* skjul frosne headers fra den visning man forlader */
+  ['fh-gantt', 'fh-ovz'].forEach(id => { const fh = document.getElementById(id); if (fh && fh._sync) fh._sync(); });
   updateViewHash();
 }
 /* URL-hash gør visningen link-bar (#overblik, #detalje/nezasa) uden at spamme historikken */
