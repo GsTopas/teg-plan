@@ -1556,8 +1556,8 @@ function renderOverblik() {
           q = q2 + 1;
         }
       } else {
-        /* spor uden opgaver endnu: vis sporets egen periode som hidtil */
-        html += `<div ${barAttr} style="position:absolute;left:${x1}px;top:17px;width:${x2solid-x1}px;height:12px;border-radius:6px;background:${col};cursor:pointer;"></div>`;
+        /* spor uden opgaver: kun en diskret tynd streg for sporets ramme — ingen fuld bjælke */
+        html += `<div ${barAttr} style="position:absolute;left:${x1}px;top:21.5px;width:${x2solid-x1}px;height:3px;border-radius:2px;background:${col};opacity:.28;cursor:pointer;"></div>`;
         lastEnd = x2solid;
       }
       if (t.ongoing && lastEnd != null && xEnd > lastEnd + 2) {
