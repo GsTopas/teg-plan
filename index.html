@@ -227,7 +227,7 @@
     <div class="card-head">
       <div>
         <h2>Overblik</h2>
-        <p class="desc">Det store billede i kvartaler frem til Q2 2028 · ét spor pr. linje med opgaver som ◆-punkter · klik på et spor for økonomi (One-Time &amp; Recurring Fee) · klik på en ◆ for at redigere opgaven.</p>
+        <p class="desc">Det store billede i kvartaler frem til Q3 2028 · ét spor pr. linje med opgaver som ◆-punkter · klik på et spor for økonomi (One-Time &amp; Recurring Fee) · klik på en ◆ for at redigere opgaven.</p>
       </div>
     </div>
     <div id="ovz-outer" style="overflow-x:auto;"><div id="ovz" style="position:relative;"></div></div>
@@ -315,7 +315,7 @@
     <div id="warnings"></div>
   </section>
 
-  <footer>TEG digitaliseringsplan (jul 2026 – jun 2028) · oprettet 14. juli 2026 · baseret på “TEG 3 Års Digitaliserings plan”.</footer>
+  <footer>TEG digitaliseringsplan (jul 2026 – sep 2028) · oprettet 14. juli 2026 · baseret på “TEG 3 Års Digitaliserings plan”.</footer>
 </div>
 <div id="msQuickEdit"></div>
 <div id="tooltip" role="tooltip"></div>
@@ -341,8 +341,8 @@ const SUPABASE_ANON_KEY = 'sb_publishable_1J98JZQ2qBBer2cI-hS3Tg_rPXC2sFC';
 const MONTHS = [];
 (function(){
   const names = ['Jan','Feb','Mar','Apr','Maj','Jun','Jul','Aug','Sep','Okt','Nov','Dec'];
-  let y = 2026, m = 6; // Jul 2026 … Jun 2028 (24 mdr, t.o.m. Q2 2028)
-  for (let i = 0; i < 24; i++) {
+  let y = 2026, m = 6; // Jul 2026 … Sep 2028 (27 mdr, t.o.m. Q3 2028)
+  for (let i = 0; i < 27; i++) {
     MONTHS.push({ label: names[m], year: y, full: names[m] + ' ' + y, q: 'Q' + (Math.floor(m/3)+1) + ' ' + y });
     m++; if (m > 11) { m = 0; y++; }
   }
@@ -1555,13 +1555,13 @@ function renderChangelog() {
   }).join('') + `<div style="font-size:11px;color:var(--text-muted);padding:6px 2px;">Viser de seneste ${CHANGELOG.length} ændringer — hele historikken ligger i databasen (plan_changelog).</div>`;
 }
 
-/* ================== OVERBLIK (zoomet ud: kun spor, kvartaler til Q2 2028) ================== */
+/* ================== OVERBLIK (zoomet ud: kun spor, kvartaler til Q3 2028) ================== */
 function renderOverblik() {
   const cont = $('#ovz'); if (!cont) return;
   const outerW = $('#ovz-outer').clientWidth;
   const W = Math.max(outerW, 980);
   const plotW = W - G.labelW;
-  const MCOUNT = 24; /* jul 2026 – jun 2028 = t.o.m. Q2 2028 */
+  const MCOUNT = 27; /* jul 2026 – sep 2028 = t.o.m. Q3 2028 */
   const colW = plotW / MCOUNT;
   const tracks = visibleTracks();
   /* hver beløbslinje står på sin egen linje under navnet — rækkehøjden følger med.
@@ -1604,13 +1604,13 @@ function renderOverblik() {
   cont.style.width = W + 'px';
   cont.style.height = H + 'px';
   const qLabels = [];
-  { let y = 2026, q = 3; for (let i = 0; i < 8; i++) { qLabels.push('Q' + q + ' ' + y); q++; if (q > 4) { q = 1; y++; } } }
+  { let y = 2026, q = 3; for (let i = 0; i < 9; i++) { qLabels.push('Q' + q + ' ' + y); q++; if (q > 4) { q = 1; y++; } } }
   let headHtml = '';
   qLabels.forEach((lbl, i) => {
     headHtml += `<div style="position:absolute;left:${G.labelW + i*3*colW}px;top:8px;width:${3*colW}px;font-size:11.5px;color:var(--text-muted);text-align:center;">${lbl}</div>`;
   });
   let html = headHtml;
-  for (let i = 0; i <= 8; i++) {
+  for (let i = 0; i <= 9; i++) {
     html += `<div style="position:absolute;left:${G.labelW + i*3*colW}px;top:${G.headH-8}px;bottom:30px;width:1px;background:var(--grid);"></div>`;
   }
   const now = new Date();
@@ -2029,7 +2029,7 @@ function initControls() {
     refresh(false);
   });
   $('#exportBtn').addEventListener('click', async () => {
-    const data = JSON.stringify({ horizon:'2026-07..2028-06', people:PEOPLE, tracks:TRACKS, allocations:ALLOC, dependencies:DEPS, subtasks:SUBTASKS }, null, 2);
+    const data = JSON.stringify({ horizon:'2026-07..2028-09', people:PEOPLE, tracks:TRACKS, allocations:ALLOC, dependencies:DEPS, subtasks:SUBTASKS }, null, 2);
     try { await navigator.clipboard.writeText(data); $('#exportBtn').textContent = 'Kopieret ✓'; }
     catch { const b = new Blob([data], {type:'application/json'}); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href=u; a.download='teg-plan-data.json'; a.click(); }
     setTimeout(() => $('#exportBtn').textContent = 'Kopiér data (JSON)', 1800);
