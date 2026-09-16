@@ -279,7 +279,7 @@
     <details class="tblview"><summary>Vis som tabel</summary><div id="heatTable"></div></details>
   </section>
 
-  <section class="card view-ov">
+  <section class="card view-ov" id="editCard">
     <h2>Redigér data</h2>
     <p class="desc">Ændringer slår igennem med det samme i tidslinje, heatmap og advarsler – og gemmes automatisk i databasen, så alle ser det samme.</p>
     <details class="editor">
@@ -510,7 +510,7 @@ function subscribeRealtime() {
 
 /* ================== HJÆLPERE ================== */
 const $ = s => document.querySelector(s);
-const state = { person:'', track:'', showDeps:true, detailTrack:'' };
+const state = { person:'', track:'', showDeps:true, detailTrack:'', canEdit:true };
 const openMsGroups = new Set(); /* hvilke spor-grupper i punkt-editoren der står åbne */
 let depDraft = null; /* udkast til ny afhængighed — gemmes først når begge sider er valgt */
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -1513,6 +1513,8 @@ function renderDetail() {
     t.milestones.push(ms);
     refresh(true);
   });
+  /* læse-brugere (gæster) kan se alt, men ikke ændre — databasen afviser alligevel skrivninger */
+  if (!state.canEdit) box.querySelectorAll('input,select,button,textarea').forEach(el => el.disabled = true);
 }
 
 /* ================== ÆNDRINGSLOG ================== */
@@ -1732,6 +1734,7 @@ function renderOverblik() {
   }));
 }
 function openFeeEdit(tid, x, y) {
+  if (!state.canEdit) return; /* læse-brugere: ingen økonomi-popup */
   const t = trackById(tid); if (!t) return;
   const qe = $('#msQuickEdit');
   qe.innerHTML = `
@@ -1891,6 +1894,7 @@ function closeMsQuickEdit() {
   delete qe.dataset.track;
 }
 function openMsQuickEdit(msId, x, y) {
+  if (!state.canEdit) return; /* læse-brugere: ingen redigerings-popup (tooltip virker stadig) */
   const found = findMs(msId); if (!found) return;
   const { t, ms } = found;
   const qe = $('#msQuickEdit');
@@ -2082,9 +2086,19 @@ function startUI() {
 }
 async function boot() {
   if (booted) return; booted = true;
-  await loadAll();
+  /* rettighedstjek og data hentes parallelt; fejler tjekket, håndhæver databasen alligevel */
+  const [, canEdit] = await Promise.all([
+    loadAll(),
+    sb.rpc('plan_can_edit').then(r => (r.error ? true : r.data !== false)).catch(() => true),
+  ]);
+  state.canEdit = canEdit;
   subscribeRealtime();
   $('#logoutBtn').style.display = '';
+  if (!state.canEdit) {
+    /* gæst med læseadgang: skjul hele redigerings-sektionen */
+    const ec = $('#editCard'); if (ec) ec.style.display = 'none';
+    document.body.classList.add('readonly');
+  }
   startUI();
 }
 function showLogin() {
