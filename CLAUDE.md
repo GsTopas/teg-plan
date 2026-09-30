@@ -20,6 +20,8 @@ messages are all in Danish. Keep writing them in Danish.
   functions, triggers and realtime setup. It is not a migration. Change the live
   DB through a Supabase migration (`apply_migration`), then update that file in
   the same PR.
+- **`kilder/`** holds background documents (the original 3-year plan, notes).
+  Read them for context on *why* the plan is shaped as it is. The site does not use them.
 - **Only dependency:** supabase-js from jsDelivr, pinned (`@2.116.0`) and loaded
   with `defer`. `init()` runs on DOMContentLoaded.
 - **Auth:** magic-link (OTP) login. There is no password and no server of our own.
