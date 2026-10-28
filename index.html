@@ -97,6 +97,7 @@
     padding: 6px 12px; cursor: pointer; font-size: 13px; color: var(--text-secondary);
   }
   .btn:hover { border-color: var(--axis); color: var(--text-primary); }
+  .btn:disabled { opacity: .6; cursor: wait; }
   /* KPI tiles */
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 14px; }
   .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
@@ -2108,12 +2109,25 @@ async function boot() {
 function showLogin() {
   const ov = $('#authOverlay');
   ov.style.display = 'flex';
-  $('#authSend').addEventListener('click', async () => {
+  const btn = $('#authSend');
+  btn.addEventListener('click', async () => {
     const email = $('#authEmail').value.trim();
     if (!email) { $('#authMsg').textContent = 'Skriv en e-mail først.'; return; }
-    $('#authMsg').textContent = 'Sender…';
-    const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.href.split('#')[0] } });
-    $('#authMsg').textContent = error ? 'Fejl: ' + error.message : 'Tjek din indbakke og klik på linket.';
+    if (btn.disabled) return;
+    /* hvert nyt link ugyldiggør det forrige, så undgå dobbeltklik mens mailen sendes */
+    btn.disabled = true;
+    $('#authMsg').textContent = 'Sender… (kan tage op til 20 sekunder)';
+    let error;
+    try {
+      ({ error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.href.split('#')[0] } }));
+    } catch (e) { error = e; }
+    /* mail-serveren er nogle gange langsommere end Supabase' 10 s-grænse: så svarer API'et 504,
+       men mailen bliver alligevel sendt lidt efter. Vis det som "sendt" i stedet for en fejl. */
+    const timeout = error && (error.status === 504 || /504|timeout|deadline/i.test(error.message || ''));
+    if (!error) $('#authMsg').textContent = 'Tjek din indbakke og klik på linket.';
+    else if (timeout) $('#authMsg').textContent = 'Mailen er på vej, men serveren svarede langsomt. Tjek indbakken (og spam) om et minut, og brug linket i den nyeste mail.';
+    else $('#authMsg').textContent = 'Fejl: ' + error.message;
+    setTimeout(() => { btn.disabled = false; }, timeout ? 30000 : 3000);
   });
 }
 async function init() {
