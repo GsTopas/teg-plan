@@ -211,6 +211,8 @@
     <div class="top-actions">
       <button class="btn" id="themeBtn" title="Skift mellem lys og mørk">Lys/mørk</button>
       <button class="btn" id="exportBtn" title="Kopiér alle data (spor, allokeringer, afhængigheder) som JSON">Kopiér data (JSON)</button>
+      <button class="btn" id="newLoginBtn" style="display:none" title="Opret login (eller nyt midlertidigt kodeord) til en kollega">Opret login</button>
+      <button class="btn" id="pwBtn" style="display:none" title="Skift dit kodeord">Skift kodeord</button>
       <button class="btn" id="logoutBtn" style="display:none" title="Log ud af planen">Log ud</button>
     </div>
   </header>
@@ -324,12 +326,28 @@
 <div id="authOverlay" style="display:none;position:fixed;inset:0;background:var(--page);z-index:100;align-items:center;justify-content:center;">
   <div class="card" style="max-width:380px;width:92%;">
     <h2>TEG Leveranceplan – log ind</h2>
-    <p class="desc">Skriv din arbejds-e-mail, så sender vi dig et login-link.</p>
-    <input type="email" id="authEmail" placeholder="navn@topas.dk" autocomplete="email"
-           style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-1);margin-bottom:8px;font-size:14px;">
-    <button class="btn" id="authSend" style="width:100%;padding:9px;">Send login-link</button>
+    <p class="desc">Log ind med din arbejds-e-mail og dit kodeord. Det er det samme login som i Topas BI.</p>
+    <form id="authForm">
+      <input type="email" id="authEmail" placeholder="navn@topas.dk" autocomplete="username" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-1);margin-bottom:8px;font-size:14px;">
+      <input type="password" id="authPw" placeholder="Kodeord" autocomplete="current-password" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-1);margin-bottom:8px;font-size:14px;">
+      <button class="btn" id="authLogin" type="submit" style="width:100%;padding:9px;">Log ind</button>
+    </form>
     <div id="authMsg" style="font-size:12.5px;color:var(--text-secondary);margin-top:10px;"></div>
+    <p class="desc" style="margin-top:14px;font-size:12px;">Intet kodeord? Bed Gorm om et midlertidigt.
+      <a href="#" id="authLinkToggle">Eller få et login-link på mail</a> (kan være langsomt).</p>
+    <button class="btn" id="authSend" style="display:none;width:100%;padding:9px;">Send login-link</button>
   </div>
+</div>
+<div id="pwOverlay" style="display:none;position:fixed;inset:0;background:var(--page);z-index:110;align-items:center;justify-content:center;">
+  <form class="card" id="pwForm" style="max-width:380px;width:92%;">
+    <h2>Vælg dit eget kodeord</h2>
+    <p class="desc" id="pwDesc">Du er logget ind med et midlertidigt kodeord. Vælg et nyt (mindst 8 tegn med både bogstaver og tal). Det gælder også i Topas BI.</p>
+    <input type="password" id="pwNew1" placeholder="Nyt kodeord" autocomplete="new-password" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-1);margin-bottom:8px;font-size:14px;">
+    <input type="password" id="pwNew2" placeholder="Gentag kodeord" autocomplete="new-password" style="width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-1);margin-bottom:8px;font-size:14px;">
+    <button class="btn" type="submit" style="width:100%;padding:9px;">Gem kodeord</button>
+    <button class="btn" type="button" id="pwCancel" style="display:none;width:100%;padding:9px;margin-top:6px;">Annullér</button>
+    <div id="pwMsg" style="font-size:12.5px;color:var(--text-secondary);margin-top:10px;"></div>
+  </form>
 </div>
 <div id="toast" style="display:none;position:fixed;bottom:18px;right:18px;z-index:120;background:var(--surface-1);border:1px solid var(--axis);border-radius:9px;padding:9px 13px;font-size:13px;box-shadow:0 4px 18px rgba(0,0,0,.2);max-width:320px;"></div>
 
@@ -2099,6 +2117,9 @@ async function boot() {
   state.canEdit = canEdit;
   subscribeRealtime();
   $('#logoutBtn').style.display = '';
+  $('#pwBtn').style.display = '';
+  /* "Opret login" vises kun for administratorer (tjekkes af funktionen teg-admin) */
+  tegAdmin({ handling: 'tjek' }).then(r => { if (r.admin) $('#newLoginBtn').style.display = ''; }).catch(() => {});
   if (!state.canEdit) {
     /* gæst med læseadgang: skjul hele redigerings-sektionen */
     const ec = $('#editCard'); if (ec) ec.style.display = 'none';
@@ -2106,9 +2127,67 @@ async function boot() {
   }
   startUI();
 }
+async function tegAdmin(body) {
+  const { data: { session } } = await sb.auth.getSession();
+  const r = await fetch(SUPABASE_URL + '/functions/v1/teg-admin', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + (session ? session.access_token : '') },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.fejl || ('HTTP ' + r.status));
+  return j;
+}
+/* Kodeord: mindst 8 tegn med både bogstaver og tal (samme krav som Topas BI) */
+function showPwChange(forced) {
+  $('#pwOverlay').style.display = 'flex';
+  $('#pwCancel').style.display = forced ? 'none' : '';
+  $('#pwDesc').textContent = forced
+    ? 'Du er logget ind med et midlertidigt kodeord. Vælg et nyt (mindst 8 tegn med både bogstaver og tal). Det gælder også i Topas BI.'
+    : 'Vælg et nyt kodeord (mindst 8 tegn med både bogstaver og tal). Det gælder også i Topas BI.';
+  $('#pwMsg').textContent = '';
+  $('#pwNew1').value = ''; $('#pwNew2').value = '';
+  $('#pwNew1').focus();
+}
+function initPwChange() {
+  $('#pwCancel').addEventListener('click', () => { $('#pwOverlay').style.display = 'none'; });
+  $('#pwBtn').addEventListener('click', () => showPwChange(false));
+  $('#pwForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const a = $('#pwNew1').value, b = $('#pwNew2').value;
+    if (a.length < 8 || !/[a-zA-ZæøåÆØÅ]/.test(a) || !/\d/.test(a)) { $('#pwMsg').textContent = 'Kodeordet skal være mindst 8 tegn med både bogstaver og tal.'; return; }
+    if (a !== b) { $('#pwMsg').textContent = 'De to kodeord er ikke ens.'; return; }
+    $('#pwMsg').textContent = 'Gemmer…';
+    const { error } = await sb.auth.updateUser({ password: a, data: { must_change: false } });
+    if (error) { $('#pwMsg').textContent = 'Fejl: ' + error.message; return; }
+    $('#pwOverlay').style.display = 'none';
+    toast('Dit kodeord er gemt.');
+  });
+  $('#newLoginBtn').addEventListener('click', async () => {
+    const email = (prompt('E-mail på kollegaen, der skal have login (eller et nyt midlertidigt kodeord):') || '').trim();
+    if (!email) return;
+    try {
+      const r = await tegAdmin({ handling: 'opret', email });
+      prompt((r.nyt_login ? 'Login oprettet for ' : 'Nyt midlertidigt kodeord for ') + r.email +
+        '. Send kodeordet til dem (fx på Teams). De vælger selv et nyt ved første login på ' + location.href.split('#')[0] + ':', r.midlertidigt_kodeord);
+    } catch (err) { alert('Kunne ikke oprette login: ' + err.message); }
+  });
+}
 function showLogin() {
   const ov = $('#authOverlay');
   ov.style.display = 'flex';
+  $('#authEmail').focus();
+  $('#authLinkToggle').addEventListener('click', e => { e.preventDefault(); $('#authSend').style.display = ''; });
+  $('#authForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const email = $('#authEmail').value.trim(), password = $('#authPw').value;
+    if (!email || !password) { $('#authMsg').textContent = 'Skriv e-mail og kodeord.'; return; }
+    $('#authMsg').textContent = 'Logger ind…';
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) $('#authMsg').textContent = /invalid login/i.test(error.message)
+      ? 'Forkert e-mail eller kodeord. Har du intet kodeord, så bed Gorm om et midlertidigt.'
+      : 'Fejl: ' + error.message;
+  });
   const btn = $('#authSend');
   btn.addEventListener('click', async () => {
     const email = $('#authEmail').value.trim();
@@ -2141,8 +2220,13 @@ async function init() {
     return;
   }
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  initPwChange();
   sb.auth.onAuthStateChange((ev, session) => {
-    if (session) { $('#authOverlay').style.display = 'none'; boot(); }
+    if (session) {
+      $('#authOverlay').style.display = 'none';
+      if (session.user && session.user.user_metadata && session.user.user_metadata.must_change === true) showPwChange(true);
+      boot();
+    }
   });
   const { data: { session } } = await sb.auth.getSession();
   if (session) { await boot(); } else showLogin();
